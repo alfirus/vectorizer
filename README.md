@@ -242,6 +242,18 @@ Vectorizer calls an external LLM for:
 
 The brain is completely optional and configurable per deployment.
 
+## Integrations (Honcho-style)
+
+MCP (Claude Desktop, OpenCode, OpenClaw, Hermes via `mcp-remote`):
+```json
+{"mcpServers":{"vectorizer":{"command":"node","args":["./mcp/dist/index.js"],"env":{"VECTORIZER_URL":"http://localhost:8091","VECTORIZER_API_KEY":"...","VECTORIZER_WORKSPACE_ID":"my-agent"}}}}
+```
+Tools: `vectorizer_search`, `vectorizer_add_message`, `vectorizer_ask`, `vectorizer_summarize`, etc. (see `mcp/README.md`).
+
+Skill: `.agents/skills/vectorizer/SKILL.md` + `skills/vectorizer-memory/` — recall/record loop (store after turns, search before answering).
+
+SDKs: `sdks/typescript` (`@vectorizer/sdk`) + `sdks/python` (`vectorizer-ai`) — `new Vectorizer({baseUrl, apiKey}).search("...")`.
+
 ## Development
 
 ```bash

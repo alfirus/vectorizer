@@ -1,0 +1,5 @@
+{
+  "name": "@vectorizer/mcp",
+  "description": "MCP server for Vectorizer — workspace-isolated semantic memory (768d)",
+  "version": "0.1.0"
+}

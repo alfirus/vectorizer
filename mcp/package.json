@@ -1,0 +1,20 @@
+{
+  "name": "@vectorizer/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Vectorizer — self-hosted semantic memory (768d, ChromaDB)",
+  "type": "module",
+  "bin": { "vectorizer-mcp": "dist/index.js" },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

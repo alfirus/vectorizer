@@ -18,3 +18,9 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+mcp/dist/
+mcp/node_modules/
+sdks/typescript/dist/
+sdks/typescript/node_modules/
+sdks/python/__pycache__/
+
