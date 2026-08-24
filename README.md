@@ -2,6 +2,11 @@
 
 A lightweight, self-hosted memory server for AI agents. Stores messages as embeddings in ChromaDB with optional LLM-powered summarization and Q&A. Each agent gets isolated memory via workspace namespaces.
 
+## Documentation
+
+- **[Architecture Blueprint](docs/BLUEPRINT.md)** — full system design, data flows, API contract, config schema, deployment topology
+- **This README** — quick start guide and usage reference
+
 ## Features
 
 - **Workspace isolation** — each agent has its own namespace (ChromaDB collection)
