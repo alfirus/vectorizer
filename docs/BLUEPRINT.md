@@ -1,7 +1,7 @@
 # Vectorizer — Architecture Blueprint
 
-**Version:** 0.2.0  
-**Status:** Honcho-competitive (self-hosted, Go/Chroma 1536d Qwen3)  
+**Version:** 0.3.0  
+**Status:** Honcho-competitive agentic (self-hosted, Go/Chroma 1536d Qwen3, reasoning graph + deriver)  
 **Last updated:** 2026-08-25
 
 ---
@@ -77,14 +77,16 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 | **Security** | `internal/security/` | JWT `w/p/ad` claims, HS256, `scripts/generate_jwt.go` (Honcho `src/security.py` parity) |
 | **ChromaDB Client** | `internal/chromadb/` | ChromaDB v2 REST API wrapper (collections, upsert, query, get, heartbeat) |
 | **Embedding Service** | `internal/embedding/` | Text-to-vector conversion (1536d `Qwen3-Embedding-4B` MRL, `dimensions` param, fallback `nomic-embed-text` 768d) |
-| **LLM Brain** | `internal/llmbrain/` | Chat/summarize via `/chat/completions` (`ChatWithTemp` for reasoning levels) |
+| **LLM Brain** | `internal/llmbrain/` | Chat/summarize via `/chat/completions` (`ChatWithTemp`, `ChatWithHistory`, `prompts.go` AgentSystemPrompt) |
 | **Models** | `internal/models/` | Workspace, Session, Message (with `Metadata`), Peer, PeerCard, SearchRequest |
-| **Store** | `internal/store/` | Chunking, embed, upsert (retry), search (vector+BM25 RRF), conclusions, peers, sessions, grep, TTL, scopes |
-| **Dreamer** | `internal/dreamer/` | Periodic `summarize→embed 1536d→ws_<id>_conclusions` via `qwen-embed` (Honcho `src/dreamer/`) |
+| **Store** | `internal/store/` | Chunking, embed (`1536d`), upsert (retry), search (vector+BM25 RRF), conclusions, `reasoning.go` (`ws_<id>_reasoning`), peers, sessions, grep, TTL, scopes |
+| **Deriver** | `internal/deriver/` | Async `Enqueue` → `2s/5msg` batch → `Summarize → CreateConclusion + AddReasoningEdge` (Honcho `src/deriver`) |
+| **Dreamer** | `internal/dreamer/` | Surprisal `3h` cron: `QueryConclusions` distance `<0.15` skip → `summarize→embed 1536d→ws_<id>_conclusions` |
 | **Webhooks** | `internal/webhooks/` | In-mem endpoint registry + `Fire` (Honcho `src/webhooks`) |
-| **Handlers** | `internal/handlers/` | Workspaces, messages, sessions, peers, chat (dialectic), ingest, conclusions, webhooks, brain, metrics |
+| **gRPC** | `internal/grpc/` + `proto/vectorizer.proto` | `VectorizerService` (`AddMessage/Search/Chat/Health`) alongside REST `:50051` |
+| **Handlers** | `internal/handlers/` | Workspaces, messages (deriver Enqueue), sessions, peers, chat (agentic 5-tool loop), scopes, conclusions, keys, webhooks, brain, admin |
 | **MCP** | `mcp/` | Stdio MCP proxy (`@modelcontextprotocol/sdk`, 13 tools, Honcho `mcp/` parity) |
-| **Main** | `main.go` | Wiring, JWT/X-API-Key auth, rate limit, health/metrics, dreamer cron |
+| **Main** | `main.go` | Wiring, deriver start/stop, JWT/X-API-Key auth, rate limit, health/metrics, gRPC, dreamer cron |
 
 ---
 
@@ -161,33 +163,32 @@ Pluggable embedding provider. Supports any OpenAI-compatible `/embeddings` endpo
 { "data": [{ "embedding": [0.1, 0.2, ...] }] }
 ```
 
-### 3.4 LLM Brain (`internal/llmbrain/service.go`)
+### 3.4 LLM Brain (`internal/llmbrain/service.go` + `prompts.go`)
 
-Optional service for summarization and Q&A. Uses the OpenAI-compatible `/chat/completions` endpoint.
+Optional service for summarization and agentic Q&A. Uses the OpenAI-compatible `/chat/completions` endpoint.
 
 **Methods:**
-- `Summarize(req)` → sends text with system prompt "You are a concise summarizer" to the LLM
-- `Ask(question, context)` → RAG-style: combines retrieved context with user question
+- `Summarize(req)` → concise summarizer, temp 0.3
+- `Ask(question, context)` → RAG, temp 0.3
+- `ChatWithTemp(system, context, question, temp)` → dialectic temp per `reasoning_level`
+- `ChatWithHistory(messages, temp)` → agentic loop history (Honcho `DialecticAgent` tool loop)
+- `AgentSystemPrompt(observer, observed, obsCard, obsdCard)` → Honcho `dialectic/prompts.py` parity (perspective + peer card + 5 tools listing)
 
-**Prompt templates:**
-- Summarization: System prompt enforces conciseness. Temperature 0.3 for consistency.
-- Q&A: System prompt restricts answers to provided context. Falls back gracefully if answer isn't in context.
+### 3.5 Store (`internal/store/store.go` + `reasoning.go` + `conclusions.go`)
 
-### 3.5 Store (`internal/store/store.go`)
-
-Core business logic layer. Orchestrates embedding generation, chunking, and ChromaDB operations.
+Core business logic layer. Orchestrates embedding generation (1536d), chunking, ChromaDB, and reasoning graph.
 
 **Key methods:**
-- `AddMessage(msg, content)` → chunks text, generates embeddings, upserts to ChromaDB
-- `Search(query, workspaceID, sessionID, role, nResults)` → generates query embedding, searches across workspaces with metadata filtering
-- `GetWorkspaceStats(workspaceID)` → returns document count
+- `AddMessage(msg, content)` → chunks 4000, embed 1536d batch, upsert `ws_<workspace_id>` with `scope`/`peer_id` metadata, 3× retry
+- `Search` / `HybridSearch` → vector `EmbedSingle` + `HNSW cosine` (+ BM25 RRF), dedup/sort, temporal `after`/`before` via `SearchWithOptions`
+- `GetReasoningChain(ws, conclusionID)` → BFS over `ws_<id>_reasoning` (`AddReasoningEdge`: `conclusion_id → premise_ids + supporting_message_ids`), `GetObservationContext(ws, session, chunkID, window=2)` → surrounding chunks
+- `CreateConclusion` / `QueryConclusions` → `ws_<id>_conclusions` (1536d) + `GetRepresentation` (conclusions + session messages)
+- `dummyVector()` → `embed.Dimensions()` dynamic (1536 for Qwen3)
 
 **Chunking strategy:**
-- Max 4000 characters per chunk (configurable via `maxChunkSize` constant)
-- Word-boundary aware: tries to break at the last space if past halfway point
-- Each chunk gets metadata: message_id, session_id, workspace_id, role, created_at, chunk_index, total_chunks
+- Max 4000 characters per chunk (`maxChunkSize`), word-boundary, `chunk_index`/`total_chunks` metadata
 
-**Collection naming:** `ws_<workspace_id>` — simple prefix convention for easy identification and filtering.
+**Collection naming:** `ws_<workspace_id>`, `ws_<id>_conclusions`, `ws_<id>_reasoning`, `ws_<id>_peers`, `ws_<id>_peer_cards`, `ws_<id>_scopes` — all same `1536d` dim (Honcho `(observer, observed)` parity, flattened to workspace).
 
 ### 3.6 Handlers (`internal/handlers/`)
 
@@ -697,43 +698,49 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 ## 9. Future Roadmap
 
 ### Phase 1: Core Stability — done
-- [x] Message storage with embedding generation (1536d, chunking, retry)
-- [x] Semantic search with metadata filtering
-- [x] Optional LLM brain (summarize + ask, auto-fetch, SSE)
-- [x] Docker Compose deployment
+- [x] Message storage with embedding generation (1536d Qwen3 MRL, chunking, retry, deriver enqueue)
+- [x] Semantic search with metadata filtering + hybrid RRF + `scope`/`peer_id`
+- [x] Optional LLM brain (summarize + ask, auto-fetch, SSE, `ChatWithHistory` tool loop)
+- [x] Docker Compose deployment (`chromadb:1.0.0` + `qwen-embed` vLLM `1536d`)
 - [x] Workspace persistence (`ws_<id>` via Chroma, `EnsureCollection`)
-- [x] Session/message retrieval (`POST/GET /sessions`, `GET /messages`, `GET /messages/temporal`, `grep`)
+- [x] Session/message retrieval (`POST/GET /sessions`, `GET /messages`, `GET /messages/temporal`, `grep`, `Grep`)
 
 ### Phase 2: Search Enhancements — done
-- [x] Hybrid search (BM25 + RRF `HybridSearch`)
-- [x] Result ranking and deduplication
-- [x] Pagination (`limit`/`offset`, `SearchWithOptions`)
+- [x] Hybrid search (BM25 + RRF `HybridSearch` + `rrfFusion`)
+- [x] Result ranking and deduplication (global sort, `distance` ascending)
+- [x] Pagination (`limit`/`offset` `0..100`, `SearchWithOptions`)
 - [x] Date range filtering (`after`/`before` RFC3339)
+- [x] Grep (`GET /messages/grep`) + temporal (`GET /messages/temporal`) + `get_observation_context`
 
-### Phase 3: Brain Integration — done
-- [x] Auto-fetch for brain endpoints
-- [x] Streaming responses (SSE `GET /brain/summarize/stream`, `GET /chat/stream`)
-- [x] Conversation history summarization (dreamer 10m cron)
-- [x] Multi-turn Q&A + dialectic chat (`POST /workspaces/:id/chat` with `reasoning_level`)
+### Phase 3: Brain Integration — done (agentic, Honcho parity)
+- [x] Auto-fetch for brain endpoints + `POST /workspaces/:id/chat` (observer/observed, `AgentSystemPrompt`)
+- [x] Agentic dialectic loop: `5` tools (`search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`) via `ChatWithHistory`, `maxTools` per `reasoning_level` (`none=0, low=2, medium=4, high=6, max=8`)
+- [x] Streaming responses (SSE `GET /brain/summarize/stream`, `GET /workspaces/:id/chat/stream`)
+- [x] Conversation history summarization (surprisal dreamer `3h`, `distance<0.15` skip)
+- [x] Deriver (`internal/deriver`, `2s/5msg` batch → `Summarize Extract 1-3 facts → CreateConclusion + AddReasoningEdge`)
+- [x] Reasoning graph (`ws_<id>_reasoning`, `GetReasoningChain` BFS, `GetObservationContext` window)
 
 ### Phase 4: Scale & Reliability — done
-- [x] Health check with ChromaDB `Heartbeat` (degraded if down)
-- [x] Graceful degradation (queue + retry)
-- [x] Rate limiting (10/s token bucket per API key/IP, 429)
-- [x] Metrics (`/metrics` Prometheus)
-- [x] Batch upsert with retry/backoff (3× exponential)
+- [x] Health check with ChromaDB `Heartbeat` (degraded if down, `version 0.3.0`)
+- [x] Graceful degradation (deriver queue + `3×` retry, `continue` on query error)
+- [x] Rate limiting (`10/s` token bucket per API key / JWT `w`, `429`, `isHealthOrMetrics`)
+- [x] Metrics (`/metrics` Prometheus, `vectorizer_messages_total`)
+- [x] Batch upsert with retry/backoff (3× exponential, `100ms * 2^attempt`)
+- [x] JWT scoping (`w` must match `:workspace_id`/`:id`, `Admin` bypass)
 
 ### Phase 5: Advanced Features — done (Honcho parity)
-- [x] Message TTL (`DELETE /workspaces/:id/ttl`, `TTL_HOURS`)
-- [x] Cross-workspace search (deduped `Search` fan-out)
-- [x] Webhook notifications (`POST/GET /webhooks`, `Fire`)
-- [x] Conclusions/representations (`POST/GET /conclusions`, `GET /representations`, `ws_<id>_conclusions` 1536d)
-- [x] Peers + peer cards (`POST/GET /peers`, `PUT/GET /peers/:peer_id/card`, `ws_<id>_peers`, `ws_<id>_peer_cards`)
-- [x] JWT auth (Honcho `w/p/ad`, `AUTH_USE_AUTH`, `AUTH_JWT_SECRET`, `scripts/generate_jwt.go`)
-- [x] Layered config (`config.toml`, `env > .env > config.toml > defaults`)
-- [x] Eval harness (`evals/run.go`, Honcho `honcho.dev/evals` parity)
-- [x] Embedding model hot-swap without restart (`POST /admin/embedding {model, base_url}`, `GET /admin/embedding`, `embedService.SetModel`)
-- [x] gRPC interface alongside REST (`proto/vectorizer.proto`, `vectorizerpb`, `internal/grpc`, `GRPC_PORT` 50051, `docker-compose` + `Dockerfile` expose)
+- [x] Message TTL (`DELETE /workspaces/:id/ttl`, `TTL_HOURS`, `TTLDelete`)
+- [x] Cross-workspace search (deduped `Search` fan-out, `HybridSearch` fallback)
+- [x] Webhook notifications (`POST/GET /webhooks`, `DELETE /:id`, `GET /test`, `Fire`)
+- [x] Conclusions/representations (`POST/GET /conclusions`, `POST /conclusions/batch`, `POST /conclusions/query`, `ws_<id>_conclusions` 1536d, `GetRepresentation`)
+- [x] Peers + peer cards (`POST/GET /workspaces/:id/peers`, `PUT /workspaces/:id/peers/:peer_id`, `PUT/GET /peers/:peer_id/card`, `ws_<id>_peers`, `ws_<id>_peer_cards`)
+- [x] JWT auth (`w/p/ad`, `AUTH_USE_AUTH`, `AUTH_JWT_SECRET`, `scripts/generate_jwt/main.go`)
+- [x] Layered config (`config.toml`, `env > .env > config.toml > defaults`, `BurntSushi/toml`, `EMBED_DIMENSIONS=1536`)
+- [x] Eval harness (`evals/run.go` `recall` + `reasoning-grounded` via `chat`, `evals/data/sample.jsonl`)
+- [x] Embedding model hot-swap without restart (`POST /admin/embedding {model, base_url, dimensions}`, `GET /admin/embedding`, `SetModel/SetDimensions`)
+- [x] gRPC interface alongside REST (`proto/vectorizer.proto` `AddMessage/Search/Chat/Health`, `vectorizerpb`, `internal/grpc`, `GRPC_PORT` 50051)
+- [x] Scopes (`ws_<id>_scopes`, `POST/GET /workspaces/:id/scopes`, `POST/:scope_id/sessions`, `DELETE/:scope_id/sessions/:sid`, `GET/:scope_id/status`)
+- [x] Keys (`POST/GET /workspaces/:id/keys`, `POST/GET /keys`, `sk_*`)
 
 ---
 

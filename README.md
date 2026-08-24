@@ -10,16 +10,17 @@ A lightweight, self-hosted memory server for AI agents. Stores messages as embed
 ## Features
 
 - **Workspace isolation** — `ws_<id>` collections, no cross-talk
-- **Semantic + hybrid search** — vector cosine (HNSW) + BM25 RRF, `?hybrid=true`, temporal `after`/`before`
+- **Semantic + hybrid search** — vector cosine (HNSW) + BM25 RRF, `?hybrid=true`, temporal `after`/`before`, `grep` + `temporal` endpoints
 - **Peers + peer cards** — `POST /workspaces/:id/peers`, `PUT /peers/:peer_id/card` (Honcho peer parity)
-- **Dialectic chat** — `POST /workspaces/:id/chat` (observer/observed, `reasoning_level` none/low/medium/high/max)
-- **Conclusions + representations + dreamer** — offline `summarize→embed 1536d (Qwen3-Embedding-4B MRL)→ws_<id>_conclusions` (10m cron)
-- **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A
-- **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt.go`, Honcho parity)
-- **Layered config** — `env > .env > config.toml > defaults` (`config.toml.example`)
-- **Docker-ready** — one `docker compose up` (Chroma `1.0.0`, healthchecks, persistent volume)
-- **MCP + Skills + SDKs** — Honcho-style `mcp-remote`, `skills/`, `@vectorizer/sdk` / `vectorizer-ai`
-- **Evals** — `go run evals/run.go -file evals/data/sample.jsonl` (LongMemEval-style recall)
+- **Agentic dialectic chat** — `POST /workspaces/:id/chat` (observer/observed, `reasoning_level` none/low/medium/high/max, 5 tools: `search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`, SSE streaming)
+- **Reasoning graph + deriver** — `ws_<id>_reasoning` (premise edges, BFS `GetReasoningChain`), async deriver `2s/5msg` batch → `summarize→CreateConclusion+AddReasoningEdge` (Honcho `src/deriver` parity)
+- **Conclusions + representations + surprisal dreamer** — offline `summarize→embed 1536d→ws_<id>_conclusions` every `3h` with surprisal gate (`distance <0.15` skip)
+- **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A via `/chat/completions`
+- **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt/main.go`, Honcho parity)
+- **Layered config** — `env > .env > config.toml > defaults` (`config.toml.example`, `BurntSushi/toml`)
+- **Docker-ready** — one `docker compose up` (Chroma `1.0.0`, `qwen-embed` vLLM `1536d`, healthchecks, `qwen_cache`)
+- **MCP + Skills + SDKs** — Honcho-style `mcp-remote` (13 tools + `vectorizer_chat`), `skills/vectorizer`, `@vectorizer/sdk` / `vectorizer-ai`
+- **Evals** — `go run ./evals/run.go -file evals/data/sample.jsonl` (LongMemEval-style `recall` + `reasoning-grounded` via chat)
 
 ## Architecture
 
@@ -245,8 +246,16 @@ Pure storage + search. Your agent brings its own LLM for synthesis/Q&A. Zero hid
 Vectorizer calls an external LLM for:
 - **Summarization** — condense long conversations into key facts
 - **Q&A** — answer questions about stored memories using retrieved context
+- **Agentic dialectic** — `AgentSystemPrompt` (observer/observed) + tool loop (`search_memory`, `grep`, `get_reasoning_chain`, etc.) for grounded answers (Honcho `dialectic/prompts.py` parity)
 
 The brain is completely optional and configurable per deployment.
+
+## Reasoning Maturity (Honcho Parity)
+
+- **Reasoning graph:** `ws_<id>_reasoning` stores `conclusion_id → premise_ids + supporting_message_ids`; `GetReasoningChain` BFS traverses, `GetObservationContext` windows `±2` chunks. Enables grounding like Honcho `get_reasoning_chain`.
+- **Deriver:** async `internal/deriver` (`Enqueue` on `POST /messages`), `2s/5msg` flush → `Summarize("Extract 1-3 facts")` → `CreateConclusion(ws, peer, line) + AddReasoningEdge`. Same as Honcho `src/deriver`.
+- **Dreamer:** `3h` cron, `QueryConclusions` distance `<0.15` surprisal skip, then `Summarize` → `CreateConclusion{source: dreamer}` (1536d).
+- **Agentic chat:** `POST /workspaces/:id/chat` loops up to `maxTools` per `reasoning_level` (`none=0, low=2, medium=4, high=6, max=8`, `temp 0.1→0.9`), parsing `{"tool":"...","args":{...}}` JSON and dispatching to `QueryConclusions/Search/Grep/GetReasoningChain/GetObservationContext` before synthesis.
 
 ## End-to-End Workflow — User Prompt → AI → Vectorizer → Response
 
@@ -321,8 +330,9 @@ make build
 # Run with local ChromaDB
 make run
 
-# Run tests
+# Run tests + eval
 make test
+go run ./evals/run.go -file evals/data/sample.jsonl -base http://localhost:8091
 
 # Clean build artifacts
 make clean
@@ -332,19 +342,30 @@ make clean
 
 ```
 vectorizer/
-├── config/           # Configuration loading (env vars)
+├── config/           # Layered config (env>.env>config.toml)
 ├── internal/
 │   ├── chromadb/     # ChromaDB v2 API client
-│   ├── embedding/    # Embedding service (LM Studio / OpenAI)
-│   ├── llmbrain/     # Optional LLM summarization & Q&A
-│   ├── handlers/     # HTTP request handlers
-│   ├── models/       # Data structures
-│   └── store/        # Core storage logic + chunking
-├── main.go           # Entry point, route setup
-├── Dockerfile        # Container build
-├── docker-compose.yml# Full stack (Vectorizer + ChromaDB)
+│   ├── embedding/    # Embedding service (Qwen3 1536d MRL, dimensions param)
+│   ├── llmbrain/     # LLM brain + prompts.go (AgentSystemPrompt)
+│   ├── deriver/      # Async deriver (Honcho src/deriver)
+│   ├── dreamer/      # Surprisal dreamer (3h, 1536d)
+│   ├── handlers/     # Workspaces, messages, peers, chat (agentic), scopes, conclusions, keys, webhooks
+│   ├── models/       # Workspace, Session, Message, Peer, PeerCard, SearchRequest
+│   ├── store/        # Store + reasoning.go, scopes.go, keys.go, conclusions.go, peers.go
+│   ├── grpc/         # gRPC server (VectorizerService)
+│   ├── security/     # JWT w/p/ad
+│   └── webhooks/     # Webhook manager
+├── proto/            # vectorizer.proto (gRPC)
+├── vectorizerpb/     # Generated protobuf
+├── mcp/              # MCP proxy (13 tools)
+├── skills/           # Skills (vectorizer, memory, integration)
+├── sdks/             # TS + Python SDKs
+├── evals/            # Eval harness (LongMemEval, reasoning-grounded)
+├── main.go           # Entry point, wiring, auth, rate limit, gRPC
+├── Dockerfile        # Container build (exposes 8091+50051)
+├── docker-compose.yml# Full stack (Vectorizer + ChromaDB + qwen-embed vLLM)
 ├── Makefile          # Build/run commands
-└── .env.example      # Configuration template
+└── .env.example      # Configuration template (1536d)
 ```
 
 ## License
