@@ -1,6 +1,6 @@
 # Binaries
-vectorizer.exe
-vectorizer
+/vectorizer.exe
+/vectorizer
 
 # Environment
 .env
