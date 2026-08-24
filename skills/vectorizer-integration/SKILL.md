@@ -10,4 +10,4 @@ description: Setup Vectorizer SDK/MCP in a codebase (env, docker, health check)
 4. SDK: `npm add @vectorizer/sdk` or `pip install vectorizer-ai` (see `sdks/`).
 5. Verify: `vectorizer_search {query:"hello", workspace_id:"test"}` returns 200.
 
-Like Honcho `npx skills add plastic-labs/honcho` + `/honcho-integration`.
+Run `npx skills add vectorizer` + `/vectorizer-integration`.

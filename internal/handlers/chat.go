@@ -17,7 +17,7 @@ type ChatHandler struct {
 
 func NewChatHandler(s *store.Store, b *llmbrain.Service) *ChatHandler { return &ChatHandler{store: s, brain: b} }
 
-// POST /workspaces/:workspace_id/chat - dialectic agentic chat (Honcho peer.chat parity, tool loop)
+// POST /workspaces/:workspace_id/chat - dialectic agentic chat (peer chat, tool loop)
 func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	if h.brain == nil {
 		return c.Status(503).JSON(fiber.Map{"error": "LLM brain not enabled"})
@@ -50,7 +50,7 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	temperature := map[string]float32{"none":0.1,"low":0.3,"medium":0.5,"high":0.7,"max":0.9}[level]
 	if temperature==0 { temperature=0.3 }
 
-	// Seed context via search_memory + representation (like Honcho preflight)
+	// Seed context via search_memory + representation (preflight)
 	var seedCtx []string
 	if rep, _, _ := h.store.GetRepresentation(ws, observed, req.SessionID, 5); rep != "" {
 		seedCtx = append(seedCtx, "Representation:\n"+rep)

@@ -8,7 +8,7 @@ import (
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
-// Deriver extracts conclusions asynchronously (Honcho src/deriver parity)
+// Deriver extracts conclusions asynchronously 
 type Deriver struct {
 	store *store.Store
 	brain *llmbrain.Service

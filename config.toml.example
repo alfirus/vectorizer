@@ -1,4 +1,4 @@
-# Honcho-compatible layered config: env > .env > config.toml > defaults
+# Compatible layered config: env > .env > config.toml > defaults
 # Copy to config.toml and edit. See docs/BLUEPRINT.md §6.
 
 [app]
@@ -15,7 +15,7 @@ api_key = ""      # DEFAULT_API_KEY
 
 [embedding]
 provider = "openai-compatible"   # lm-studio | openai-compatible (Qwen3 via vLLM)
-model = "Qwen/Qwen3-Embedding-4B"  # 1536d via MRL, Honcho parity (fallback: nomic-embed-text 768d)
+model = "Qwen/Qwen3-Embedding-4B"  # 1536d via MRL,  parity (fallback: nomic-embed-text 768d)
 dimensions = 1536
 url = "http://localhost:8001/v1"  # vLLM TEI; LM Studio fallback http://localhost:1234/v1
 

@@ -1,7 +1,7 @@
 # Vectorizer — Architecture Blueprint
 
 **Version:** 0.3.0  
-**Status:** Honcho-competitive agentic (self-hosted, Go/Chroma 1536d Qwen3, reasoning graph + deriver)  
+**Status:** Self-hosted agentic (Go/Chroma 1536d Qwen3, reasoning graph + deriver)  
 **Last updated:** 2026-08-25
 
 ---
@@ -26,12 +26,12 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 - **Message storage** with automatic chunking and embedding generation (4000 chars, `Qwen/Qwen3-Embedding-4B` 1536d via MRL, `nomic-embed-text` 768d fallback)
 - **Semantic + hybrid search** (vector cosine HNSW + BM25 RRF) with scoping and temporal filters
-- **Peers + peer cards** (Honcho `Peer` parity, `ws_<id>_peers` / `ws_<id>_peer_cards`)
+- **Peers + peer cards** (`ws_<id>_peers` / `ws_<id>_peer_cards`)
 - **Dialectic chat** (`POST /workspaces/:id/chat`, observer/observed, `reasoning_level` none/low/medium/high/max)
 - **Conclusions + representations + dreamer** (offline `summarize→embed 1536d→ws_<id>_conclusions`, `qwen-embed` MRL)
 - **Optional LLM brain** for summarization and Q&A (SSE streaming, auto-fetch)
 - **Workspace isolation** — each agent gets its own namespace (`ws_<id>`)
-- **MCP + Skills + SDKs** (Honcho-style `mcp-remote`, `npx skills add`, `@vectorizer/sdk` / `vectorizer-ai`)
+- **MCP + Skills + SDKs** (`mcp-remote`, `npx skills add`, `@vectorizer/sdk` / `vectorizer-ai`)
 
 ### Design Goals
 
@@ -44,7 +44,7 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 - Not a database replacement — it's an append-only memory layer on top of ChromaDB
 - Not a session store — sessions are logical groupings, not persisted independently
-- Honcho-competitive core: peers, dialectic, conclusions/representations, dreamer, scopes — but single-binary Go/Chroma (no Postgres/pgvector), 1536d pinned (Qwen3 4B MRL)
+- Core: peers, dialectic, conclusions/representations, dreamer, scopes — single-binary Go/Chroma (no Postgres/pgvector), 1536d pinned (Qwen3 4B MRL)
 
 ---
 
@@ -73,19 +73,19 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 | Layer | Package | Responsibility |
 |-------|---------|----------------|
-| **Config** | `config/` | Layered config: `env > .env > config.toml > defaults` (Honcho `TOML_CONFIG` parity, BurntSushi/toml) |
-| **Security** | `internal/security/` | JWT `w/p/ad` claims, HS256, `scripts/generate_jwt.go` (Honcho `src/security.py` parity) |
+| **Config** | `config/` | Layered config: `env > .env > config.toml > defaults` (BurntSushi/toml) |
+| **Security** | `internal/security/` | JWT `w/p/ad` claims, HS256, `scripts/generate_jwt.go` |
 | **ChromaDB Client** | `internal/chromadb/` | ChromaDB v2 REST API wrapper (collections, upsert, query, get, heartbeat) |
 | **Embedding Service** | `internal/embedding/` | Text-to-vector conversion (1536d `Qwen3-Embedding-4B` MRL, `dimensions` param, fallback `nomic-embed-text` 768d) |
 | **LLM Brain** | `internal/llmbrain/` | Chat/summarize via `/chat/completions` (`ChatWithTemp`, `ChatWithHistory`, `prompts.go` AgentSystemPrompt) |
 | **Models** | `internal/models/` | Workspace, Session, Message (with `Metadata`), Peer, PeerCard, SearchRequest |
 | **Store** | `internal/store/` | Chunking, embed (`1536d`), upsert (retry), search (vector+BM25 RRF), conclusions, `reasoning.go` (`ws_<id>_reasoning`), peers, sessions, grep, TTL, scopes |
-| **Deriver** | `internal/deriver/` | Async `Enqueue` → `2s/5msg` batch → `Summarize → CreateConclusion + AddReasoningEdge` (Honcho `src/deriver`) |
+| **Deriver** | `internal/deriver/` | Async `Enqueue` → `2s/5msg` batch → `Summarize → CreateConclusion + AddReasoningEdge` |
 | **Dreamer** | `internal/dreamer/` | Surprisal `3h` cron: `QueryConclusions` distance `<0.15` skip → `summarize→embed 1536d→ws_<id>_conclusions` |
-| **Webhooks** | `internal/webhooks/` | In-mem endpoint registry + `Fire` (Honcho `src/webhooks`) |
+| **Webhooks** | `internal/webhooks/` | In-mem endpoint registry + `Fire` |
 | **gRPC** | `internal/grpc/` + `proto/vectorizer.proto` | `VectorizerService` (`AddMessage/Search/Chat/Health`) alongside REST `:50051` |
 | **Handlers** | `internal/handlers/` | Workspaces, messages (deriver Enqueue), sessions, peers, chat (agentic 5-tool loop), scopes, conclusions, keys, webhooks, brain, admin |
-| **MCP** | `mcp/` | Stdio MCP proxy (`@modelcontextprotocol/sdk`, 13 tools, Honcho `mcp/` parity) |
+| **MCP** | `mcp/` | Stdio MCP proxy (`@modelcontextprotocol/sdk`, 13 tools) |
 | **Main** | `main.go` | Wiring, deriver start/stop, JWT/X-API-Key auth, rate limit, health/metrics, gRPC, dreamer cron |
 
 ---
@@ -94,11 +94,11 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 ### 3.1 Config (`config/config.go`, `config.toml.example`)
 
-Layered config, Honcho `src/config.py` parity: `env > .env > config.toml > defaults` via `BurntSushi/toml`. Sections `[app]`, `[db]`, `[auth]`, `[embedding]`, `[llm]`.
+Layered config: `env > .env > config.toml > defaults` via `BurntSushi/toml`. Sections `[app]`, `[db]`, `[auth]`, `[embedding]`, `[llm]`.
 
 **Key design decisions:**
 - Embedding and LLM brain have **separate provider configs**
-- `LLM_ENABLED` gate; `AUTH_USE_AUTH` JWT gate (Honcho `AUTH_USE_AUTH`)
+- `LLM_ENABLED` gate; `AUTH_USE_AUTH` JWT gate
 - Pinned 1536d (`Qwen/Qwen3-Embedding-4B` MRL), same dim for `ws_<id>` / `ws_<id>_conclusions` / `ws_<id>_dream` / `ws_<id>_peers`
 
 **Config fields:**
@@ -123,7 +123,7 @@ Layered config, Honcho `src/config.py` parity: `env > .env > config.toml > defau
 | `ChromaTenant` | string | default_tenant | ChromaDB tenant (v2 API) |
 | `ChromaDatabase` | string | default_database | ChromaDB database (v2 API) |
 | `TTLHours` | int | 0 | Auto-delete `created_at` < now-TTL (0=disabled) |
-| `AuthUseAuth` | bool | false | Enable JWT auth (`AUTH_USE_AUTH`, Honcho parity) |
+| `AuthUseAuth` | bool | false | Enable JWT auth (`AUTH_USE_AUTH`) |
 | `AuthJWTSecret` | string | "" | HS256 secret (`AUTH_JWT_SECRET`, `w/p/ad` claims) |
 
 ### 3.2 ChromaDB Client (`internal/chromadb/client.go`)
@@ -171,8 +171,8 @@ Optional service for summarization and agentic Q&A. Uses the OpenAI-compatible `
 - `Summarize(req)` → concise summarizer, temp 0.3
 - `Ask(question, context)` → RAG, temp 0.3
 - `ChatWithTemp(system, context, question, temp)` → dialectic temp per `reasoning_level`
-- `ChatWithHistory(messages, temp)` → agentic loop history (Honcho `DialecticAgent` tool loop)
-- `AgentSystemPrompt(observer, observed, obsCard, obsdCard)` → Honcho `dialectic/prompts.py` parity (perspective + peer card + 5 tools listing)
+- `ChatWithHistory(messages, temp)` → agentic loop history
+- `AgentSystemPrompt(observer, observed, obsCard, obsdCard)` (perspective + peer card + 5 tools)
 
 ### 3.5 Store (`internal/store/store.go` + `reasoning.go` + `conclusions.go`)
 
@@ -188,7 +188,7 @@ Core business logic layer. Orchestrates embedding generation (1536d), chunking, 
 **Chunking strategy:**
 - Max 4000 characters per chunk (`maxChunkSize`), word-boundary, `chunk_index`/`total_chunks` metadata
 
-**Collection naming:** `ws_<workspace_id>`, `ws_<id>_conclusions`, `ws_<id>_reasoning`, `ws_<id>_peers`, `ws_<id>_peer_cards`, `ws_<id>_scopes` — all same `1536d` dim (Honcho `(observer, observed)` parity, flattened to workspace).
+**Collection naming:** `ws_<workspace_id>`, `ws_<id>_conclusions`, `ws_<id>_reasoning`, `ws_<id>_peers`, `ws_<id>_peer_cards`, `ws_<id>_scopes` — all same `1536d` dim, flattened to workspace.
 
 ### 3.6 Handlers (`internal/handlers/`)
 
@@ -589,7 +589,7 @@ HTTP status codes:
 | `LLM_OAI_API_KEY` | Conditional | *(empty)* | API key for LLM provider |
 | `LLM_MODEL` | No | `qwen3:8b` | LLM model name |
 
-### Configuration Precedence (Honcho `TOML_CONFIG` parity)
+### Configuration Precedence
 
 1. Environment variables (highest)
 2. `.env` file (godotenv)
@@ -712,7 +712,7 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] Date range filtering (`after`/`before` RFC3339)
 - [x] Grep (`GET /messages/grep`) + temporal (`GET /messages/temporal`) + `get_observation_context`
 
-### Phase 3: Brain Integration — done (agentic, Honcho parity)
+### Phase 3: Brain Integration — done (agentic)
 - [x] Auto-fetch for brain endpoints + `POST /workspaces/:id/chat` (observer/observed, `AgentSystemPrompt`)
 - [x] Agentic dialectic loop: `5` tools (`search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`) via `ChatWithHistory`, `maxTools` per `reasoning_level` (`none=0, low=2, medium=4, high=6, max=8`)
 - [x] Streaming responses (SSE `GET /brain/summarize/stream`, `GET /workspaces/:id/chat/stream`)
@@ -728,7 +728,7 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] Batch upsert with retry/backoff (3× exponential, `100ms * 2^attempt`)
 - [x] JWT scoping (`w` must match `:workspace_id`/`:id`, `Admin` bypass)
 
-### Phase 5: Advanced Features — done (Honcho parity)
+### Phase 5: Advanced Features — done
 - [x] Message TTL (`DELETE /workspaces/:id/ttl`, `TTL_HOURS`, `TTLDelete`)
 - [x] Cross-workspace search (deduped `Search` fan-out, `HybridSearch` fallback)
 - [x] Webhook notifications (`POST/GET /webhooks`, `DELETE /:id`, `GET /test`, `Fire`)

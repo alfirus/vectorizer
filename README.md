@@ -11,15 +11,15 @@ A lightweight, self-hosted memory server for AI agents. Stores messages as embed
 
 - **Workspace isolation** — `ws_<id>` collections, no cross-talk
 - **Semantic + hybrid search** — vector cosine (HNSW) + BM25 RRF, `?hybrid=true`, temporal `after`/`before`, `grep` + `temporal` endpoints
-- **Peers + peer cards** — `POST /workspaces/:id/peers`, `PUT /peers/:peer_id/card` (Honcho peer parity)
+- **Peers + peer cards** — `POST /workspaces/:id/peers`, `PUT /peers/:peer_id/card`
 - **Agentic dialectic chat** — `POST /workspaces/:id/chat` (observer/observed, `reasoning_level` none/low/medium/high/max, 5 tools: `search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`, SSE streaming)
-- **Reasoning graph + deriver** — `ws_<id>_reasoning` (premise edges, BFS `GetReasoningChain`), async deriver `2s/5msg` batch → `summarize→CreateConclusion+AddReasoningEdge` (Honcho `src/deriver` parity)
+- **Reasoning graph + deriver** — `ws_<id>_reasoning` (premise edges, BFS `GetReasoningChain`), async deriver `2s/5msg` batch → `summarize→CreateConclusion+AddReasoningEdge`
 - **Conclusions + representations + surprisal dreamer** — offline `summarize→embed 1536d→ws_<id>_conclusions` every `3h` with surprisal gate (`distance <0.15` skip)
 - **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A via `/chat/completions`
-- **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt/main.go`, Honcho parity)
+- **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt/main.go`, Vectorizer parity)
 - **Layered config** — `env > .env > config.toml > defaults` (`config.toml.example`, `BurntSushi/toml`)
 - **Docker-ready** — one `docker compose up` (Chroma `1.0.0`, `qwen-embed` vLLM `1536d`, healthchecks, `qwen_cache`)
-- **MCP + Skills + SDKs** — Honcho-style `mcp-remote` (13 tools + `vectorizer_chat`), `skills/vectorizer`, `@vectorizer/sdk` / `vectorizer-ai`
+- **MCP + Skills + SDKs** — `mcp-remote` (13 tools + `vectorizer_chat`), `skills/vectorizer`, `@vectorizer/sdk` / `vectorizer-ai`
 - **Evals** — `go run ./evals/run.go -file evals/data/sample.jsonl` (LongMemEval-style `recall` + `reasoning-grounded` via chat)
 
 ## Architecture
@@ -246,14 +246,14 @@ Pure storage + search. Your agent brings its own LLM for synthesis/Q&A. Zero hid
 Vectorizer calls an external LLM for:
 - **Summarization** — condense long conversations into key facts
 - **Q&A** — answer questions about stored memories using retrieved context
-- **Agentic dialectic** — `AgentSystemPrompt` (observer/observed) + tool loop (`search_memory`, `grep`, `get_reasoning_chain`, etc.) for grounded answers (Honcho `dialectic/prompts.py` parity)
+- **Agentic dialectic** — `AgentSystemPrompt` (observer/observed) + tool loop (`search_memory`, `grep`, `get_reasoning_chain`, etc.) for grounded answers
 
 The brain is completely optional and configurable per deployment.
 
-## Reasoning Maturity (Honcho Parity)
+## Reasoning Maturity
 
-- **Reasoning graph:** `ws_<id>_reasoning` stores `conclusion_id → premise_ids + supporting_message_ids`; `GetReasoningChain` BFS traverses, `GetObservationContext` windows `±2` chunks. Enables grounding like Honcho `get_reasoning_chain`.
-- **Deriver:** async `internal/deriver` (`Enqueue` on `POST /messages`), `2s/5msg` flush → `Summarize("Extract 1-3 facts")` → `CreateConclusion(ws, peer, line) + AddReasoningEdge`. Same as Honcho `src/deriver`.
+- **Reasoning graph:** `ws_<id>_reasoning` stores `conclusion_id → premise_ids + supporting_message_ids`; `GetReasoningChain` BFS traverses, `GetObservationContext` windows `±2` chunks. Enables grounding via BFS traversal.
+- **Deriver:** async `internal/deriver` (`Enqueue` on `POST /messages`), `2s/5msg` flush → `Summarize("Extract 1-3 facts")` → `CreateConclusion(ws, peer, line) + AddReasoningEdge`. Async background extraction.
 - **Dreamer:** `3h` cron, `QueryConclusions` distance `<0.15` surprisal skip, then `Summarize` → `CreateConclusion{source: dreamer}` (1536d).
 - **Agentic chat:** `POST /workspaces/:id/chat` loops up to `maxTools` per `reasoning_level` (`none=0, low=2, medium=4, high=6, max=8`, `temp 0.1→0.9`), parsing `{"tool":"...","args":{...}}` JSON and dispatching to `QueryConclusions/Search/Grep/GetReasoningChain/GetObservationContext` before synthesis.
 
@@ -307,9 +307,9 @@ AI Agent (Hermes/OpenClaw/OpenCode/Claude) receives prompt
 6. **Background:** Dreamer, TTL, webhooks run offline; future recalls benefit.
 7. **Fallback:** If `VECTORIZER_URL` down, agent proceeds without memory (graceful degradation); if `X-API-Key`/JWT missing, `401`; metrics at `/metrics`, health at `/api/v1/health` (public).
 
-Honcho parity: this mirrors Honcho's `Store → Reason (deriver) → Query (chat/representation) → Inject` loop, but single-binary Go/Chroma.
+This mirrors the `Store → Reason (deriver) → Query (chat/representation) → Inject` loop, single-binary Go/Chroma.
 
-## Integrations (Honcho-style)
+## Integrations
 
 MCP (Claude Desktop, OpenCode, OpenClaw, Hermes via `mcp-remote`):
 ```json
@@ -347,7 +347,7 @@ vectorizer/
 │   ├── chromadb/     # ChromaDB v2 API client
 │   ├── embedding/    # Embedding service (Qwen3 1536d MRL, dimensions param)
 │   ├── llmbrain/     # LLM brain + prompts.go (AgentSystemPrompt)
-│   ├── deriver/      # Async deriver (Honcho src/deriver)
+│   ├── deriver/      # Async deriver
 │   ├── dreamer/      # Surprisal dreamer (3h, 1536d)
 │   ├── handlers/     # Workspaces, messages, peers, chat (agentic), scopes, conclusions, keys, webhooks
 │   ├── models/       # Workspace, Session, Message, Peer, PeerCard, SearchRequest

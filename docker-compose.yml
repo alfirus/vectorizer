@@ -27,7 +27,7 @@ services:
       retries: 3
       start_period: 10s
 
-  # Qwen3-Embedding-4B at 1536d via vLLM MRL (Honcho VECTOR_DIMENSIONS parity)
+  # Qwen3-Embedding-4B at 1536d via vLLM MRL (1536d)
   # Requires Docker with NVIDIA runtime for GPU. For CPU-only dev, keep using nomic-embed-text (768d) by setting EMBED_MODEL=nomic-embed-text.
   qwen-embed:
     image: vllm/vllm-openai:latest

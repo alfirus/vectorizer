@@ -15,7 +15,7 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// GenerateToken mints a JWT for local dev/testing. Honcho-compatible: use scripts/generate_jwt.py analogue.
+// GenerateToken mints a JWT for local dev/testing. Compatible: use scripts/generate_jwt.py analogue.
 func GenerateToken(secret, workspace, peer string, admin bool, expires time.Duration) (string, error) {
 	claims := Claims{Workspace: workspace, Peer: peer, Admin: admin}
 	if expires > 0 {

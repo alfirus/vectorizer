@@ -14,13 +14,13 @@ type Config struct {
 	ChromaPort  int    `env:"CHROMA_PORT"`
 	DefaultAPIKey string `env:"DEFAULT_API_KEY"`
 	
-	// Embedding config (Honcho parity: 1536d via Qwen3-Embedding-4B MRL)
+	// Embedding config ( 1536d via Qwen3-Embedding-4B MRL)
 	EmbedProvider   string `env:"EMBED_PROVIDER"` // "lm-studio" or "openai-compatible"
 	LmStudioURL     string `env:"LM_STUDIO_URL"`
 	OAICompatibleURL string `env:"OAI_COMPATIBLE_URL"`
 	OAIAPIKey       string `env:"OAI_API_KEY"`
 	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "Qwen/Qwen3-Embedding-4B" (1536d) or "nomic-embed-text" (768d)
-	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), Honcho VECTOR_DIMENSIONS parity
+	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), 1536d
 	
 	// LLM Brain config (optional)
 	LLMEnabled        bool   `env:"LLM_ENABLED"`
@@ -34,7 +34,7 @@ type Config struct {
 	TTLHours       int    `env:"TTL_HOURS"` // 0 = disabled
 	WorkspaceConfig string `env:"WORKSPACE_CONFIG"` // json overrides
 
-	// Auth (Honcho-compatible JWT)
+	// Auth (Compatible JWT)
 	AuthUseAuth   bool   `env:"AUTH_USE_AUTH"`
 	AuthJWTSecret string `env:"AUTH_JWT_SECRET"`
 

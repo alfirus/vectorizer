@@ -13,7 +13,7 @@ import (
 
 // Minimal eval harness: ingest LongMemEval-style jsonl then query, score by recall of expected answer substring.
 // Usage: go run evals/run.go -base http://localhost:8091 -file evals/data.jsonl
-// Honcho parity: see https://honcho.dev/evals/ and blog long-term benchmarks.
+//  see evals/README and blog long-term benchmarks.
 
 type Record struct {
 	WorkspaceID string `json:"workspace_id"`

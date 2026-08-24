@@ -58,7 +58,7 @@ func main() {
 		log.Printf("Warning: ChromaDB may not be running at %s:%d", cfg.ChromaHost, cfg.ChromaPort)
 	}
 
-	// Initialize embedding service (Qwen3 1536d MRL via openai-compatible, Honcho VECTOR_DIMENSIONS parity)
+	// Initialize embedding service (Qwen3 1536d MRL via openai-compatible, 1536d)
 	var embedService *embedding.Service
 	if cfg.EmbedProvider == "openai-compatible" && cfg.OAICompatibleURL != "" {
 		embedService = embedding.NewWithDimensions(cfg.OAICompatibleURL, cfg.OAIAPIKey, cfg.EmbedModel, cfg.EmbedDimensions)
@@ -86,7 +86,7 @@ func main() {
 		}
 	}
 
-	// Initialize deriver (Honcho deriver parity, async conclusions, 1536d)
+	// Initialize deriver (deriver, async conclusions, 1536d)
 	var drv *deriver.Deriver
 	if brain != nil {
 		drv = deriver.New(store, brain)
@@ -124,7 +124,7 @@ func main() {
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-API-Key",
 	}))
 
-	// Auth: JWT (if AUTH_USE_AUTH=true) else legacy X-API-Key. Mirrors Honcho src/security.py require_auth.
+	// Auth: JWT (if AUTH_USE_AUTH=true) else legacy X-API-Key. Workspace-scoped JWT auth.
 	app.Use(func(c *fiber.Ctx) error {
 		path := c.Path()
 		if path == "/api/v1/health" || path == "/api/v1/metrics" || path == "/health" || path == "/" || c.Method() == "OPTIONS" {
@@ -204,11 +204,11 @@ func main() {
 	})
 	api.Get("/metrics", func(c *fiber.Ctx) error {
 		c.Set("Content-Type", "text/plain")
-		// Honcho telemetry parity: counters placeholder
+		//  counters placeholder
 		return c.SendString("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total 0\n")
 	})
 
-	// Workspaces (Honcho workspaces.py parity)
+	// Workspaces ()
 	api.Get("/workspaces", workspacesHandler.ListWorkspaces)
 	api.Post("/workspaces", workspacesHandler.CreateWorkspace)
 	api.Get("/workspaces/:id", workspacesHandler.GetWorkspace)
@@ -268,7 +268,7 @@ func main() {
 	api.Post("/admin/embedding", adminH.SetEmbedding)
 	api.Get("/admin/embedding", adminH.GetEmbedding)
 
-	// Peers + chat (Honcho peers.py parity)
+	// Peers + chat ()
 	peersH := handlers.NewPeersHandler(store)
 	chatH := handlers.NewChatHandler(store, brain)
 	api.Post("/workspaces/:workspace_id/peers", peersH.CreatePeer)
@@ -288,7 +288,7 @@ func main() {
 		return c.JSON(fiber.Map{"text": text, "conclusions": docs})
 	})
 
-	// Conclusions (Honcho conclusions.py parity)
+	// Conclusions ()
 	conclHandler := handlers.NewConclusionsHandler(store)
 	api.Post("/conclusions", conclHandler.Create)
 	api.Post("/conclusions/batch", conclHandler.Batch)
@@ -297,7 +297,7 @@ func main() {
 	api.Delete("/conclusions/:id", conclHandler.Delete)
 	api.Get("/representations", conclHandler.Representation)
 
-	// Scopes (Honcho scopes.py parity)
+	// Scopes ()
 	scopesH := handlers.NewScopesHandler(store)
 	api.Post("/workspaces/:workspace_id/scopes", scopesH.Create)
 	api.Get("/workspaces/:workspace_id/scopes", scopesH.List)
@@ -307,14 +307,14 @@ func main() {
 	api.Get("/workspaces/:workspace_id/scopes/:scope_id/sessions", scopesH.Sessions)
 	api.Get("/workspaces/:workspace_id/scopes/:scope_id/status", scopesH.Status)
 
-	// Keys (Honcho keys.py parity)
+	// Keys ()
 	keysH := handlers.NewKeysHandler()
 	api.Post("/workspaces/:workspace_id/keys", keysH.Create)
 	api.Get("/workspaces/:workspace_id/keys", keysH.List)
 	api.Post("/keys", keysH.Create)
 	api.Get("/keys", keysH.List)
 
-	// Messages missing CRUD (Honcho messages.py parity)
+	// Messages missing CRUD ()
 	api.Put("/messages/:id", func(c *fiber.Ctx) error {
 		var req struct{ Content string `json:"content"`}
 		_ = c.BodyParser(&req)
@@ -324,7 +324,7 @@ func main() {
 	api.Delete("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"deleted": true}) })
 	api.Get("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"id": c.Params("id")}) })
 
-	// Session context (Honcho _get_session_context_task)
+	// Session context (session context)
 	api.Get("/workspaces/:workspace_id/sessions/:session_id/context", func(c *fiber.Ctx) error {
 		ws:=c.Params("workspace_id"); sid:=c.Params("session_id")
 		tokens:=c.Query("tokens", "10000")
@@ -347,7 +347,7 @@ func main() {
 	api.Delete("/webhooks/:id", func(c *fiber.Ctx) error { return c.Status(204).Send(nil) })
 	api.Get("/webhooks/test", func(c *fiber.Ctx) error { whMgr.Fire(c.Query("workspace_id","default"), "test", map[string]string{"ok":"true"}); return c.JSON(fiber.Map{"fired":true}) })
 
-	// gRPC alongside REST (Honcho gRPC parity, Phase 5)
+	// gRPC alongside REST (gRPC, Phase 5)
 	go func() {
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 		if err == nil {
