@@ -103,9 +103,9 @@ func main() {
 		app.Use(func(c *fiber.Ctx) error {
 			apiKey := c.Get("X-API-Key")
 			path := c.Path()
-			
+
 			// Skip auth for health check and CORS preflight
-			if path == "/health" || path == "/" || c.Method() == "OPTIONS" {
+			if path == "/api/v1/health" || path == "/health" || path == "/" || c.Method() == "OPTIONS" {
 				return c.Next()
 			}
 

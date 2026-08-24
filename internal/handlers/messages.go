@@ -68,7 +68,9 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 // AddBatchMessages stores multiple messages in a single request.
 func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 	var req struct {
+		WorkspaceID string `json:"workspace_id"`
 		Messages []struct {
+			WorkspaceID string `json:"workspace_id"`
 			SessionID string `json:"session_id"`
 			Role      string `json:"role"`
 			Content   string `json:"content"`
@@ -91,11 +93,22 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 		if msg.SessionID == "" || msg.Role == "" || msg.Content == "" {
 			continue
 		}
-
-		// Extract workspace_id from session metadata or use a default
+		wsID := msg.WorkspaceID
+		if wsID == "" {
+			wsID = req.WorkspaceID
+		}
+		if wsID == "" {
+			results = append(results, fiber.Map{
+				"session_id": msg.SessionID,
+				"role":       msg.Role,
+				"stored":     false,
+				"error":      "workspace_id is required",
+			})
+			continue
+		}
 		sessionID := msg.SessionID
-		
-		m := models.NewMessage("", sessionID, msg.Role, msg.Content)
+
+		m := models.NewMessage(wsID, sessionID, msg.Role, msg.Content)
 		if err := h.store.AddMessage(m, msg.Content); err != nil {
 			results = append(results, fiber.Map{
 				"session_id": sessionID,
@@ -139,7 +152,19 @@ func (h *MessagesHandler) SearchMessages(c *fiber.Ctx) error {
 		nResults = req.NResults
 	}
 
-	results, err := h.store.Search(req.Query, req.Where["workspace_id"].(string), req.Where["session_id"].(string), req.Where["role"].(string), nResults)
+	var wID, sID, role string
+	if req.Where != nil {
+		if v, ok := req.Where["workspace_id"].(string); ok {
+			wID = v
+		}
+		if v, ok := req.Where["session_id"].(string); ok {
+			sID = v
+		}
+		if v, ok := req.Where["role"].(string); ok {
+			role = v
+		}
+	}
+	results, err := h.store.Search(req.Query, wID, sID, role, nResults)
 	if err != nil {
 		fmt.Printf("Error searching: %v\n", err)
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{

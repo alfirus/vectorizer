@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ func (s *Store) GetCollectionName(workspaceID string) string {
 
 // AddMessage stores a message in ChromaDB with embedding.
 func (s *Store) AddMessage(msg *models.Message, content string) error {
-	collName := s.GetCollectionName(msg.SessionID) // per-session collection for isolation
+	collName := s.GetCollectionName(msg.WorkspaceID)
 	
 	// Ensure collection exists
 	if _, err := s.chroma.EnsureCollection(collName, map[string]interface{}{
@@ -169,13 +170,35 @@ func (s *Store) Search(query string, workspaceID string, sessionID string, role 
 		}
 	}
 
-	return results, nil
+	// Global sort by distance ascending and deduplicate by ID, then truncate.
+	sort.Slice(results, func(i, j int) bool { return results[i].Distance < results[j].Distance })
+	seen := make(map[string]struct{}, len(results))
+	deduped := results[:0]
+	for _, r := range results {
+		if _, ok := seen[r.ID]; ok {
+			continue
+		}
+		seen[r.ID] = struct{}{}
+		deduped = append(deduped, r)
+	}
+	if len(deduped) > nResults {
+		deduped = deduped[:nResults]
+	}
+	return deduped, nil
 }
 
 // GetWorkspaceStats returns stats for a workspace.
 func (s *Store) GetWorkspaceStats(workspaceID string) (map[string]interface{}, error) {
 	collName := s.GetCollectionName(workspaceID)
-	count, err := s.chroma.Count(collName)
+	coll, err := s.chroma.GetCollection(collName)
+	if err != nil {
+		// Collection doesn't exist yet — treat as empty.
+		return map[string]interface{}{
+			"workspace_id":   workspaceID,
+			"document_count": 0,
+		}, nil
+	}
+	count, err := s.chroma.Count(coll.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get workspace stats: %w", err)
 	}
@@ -199,25 +222,24 @@ func chunkText(text string, maxSize int) []string {
 
 	var chunks []string
 	runes := []rune(text)
-	
-	for i := 0; i < len(runes); i += maxSize {
+
+	i := 0
+	for i < len(runes) {
 		end := i + maxSize
-		if end > len(runes) {
-			end = len(runes)
+		if end >= len(runes) {
+			chunks = append(chunks, string(runes[i:]))
+			break
 		}
-		
-		// Try to break at word boundary
 		chunk := string(runes[i:end])
-		if end < len(runes) {
-			// Look for last space in chunk
-			lastSpace := strings.LastIndex(chunk, " ")
-			if lastSpace > maxSize/2 { // only use if we're past halfway
-				chunk = string(runes[i : i+lastSpace])
-				end = i + lastSpace
-			}
+		lastSpace := strings.LastIndex(chunk, " ")
+		if lastSpace > maxSize/2 {
+			chunk = string(runes[i : i+lastSpace])
+			chunks = append(chunks, chunk)
+			i += lastSpace + 1 // skip the space
+		} else {
+			chunks = append(chunks, chunk)
+			i = end
 		}
-		
-		chunks = append(chunks, chunk)
 	}
 
 	return chunks
