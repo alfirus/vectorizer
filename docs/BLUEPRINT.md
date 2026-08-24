@@ -1,7 +1,7 @@
 # Vectorizer — Architecture Blueprint
 
-**Version:** 0.3.0  
-**Status:** Self-hosted agentic (Go/Chroma 1536d Qwen3, reasoning graph + deriver)  
+**Version:** 0.4.0  
+**Status:** Self-hosted agentic (Go/Chroma 1536d Qwen3, reasoning graph + deriver, Google AI Studio)  
 **Last updated:** 2026-08-25
 
 ---
@@ -24,20 +24,21 @@
 
 Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
-- **Message storage** with automatic chunking and embedding generation (4000 chars, `Qwen/Qwen3-Embedding-4B` 1536d via MRL, `nomic-embed-text` 768d fallback)
+- **Message storage** with automatic chunking and embedding generation (4000 chars, `Qwen/Qwen3-Embedding-4B` 1536d via MRL, `nomic-embed-text` 768d fallback, Google AI Studio `text-embedding-004`/`005` 768d)
 - **Semantic + hybrid search** (vector cosine HNSW + BM25 RRF) with scoping and temporal filters
 - **Peers + peer cards** (`ws_<id>_peers` / `ws_<id>_peer_cards`)
 - **Dialectic chat** (`POST /workspaces/:id/chat`, observer/observed, `reasoning_level` none/low/medium/high/max)
 - **Conclusions + representations + dreamer** (offline `summarize→embed 1536d→ws_<id>_conclusions`, `qwen-embed` MRL)
 - **Optional LLM brain** for summarization and Q&A (SSE streaming, auto-fetch)
 - **Workspace isolation** — each agent gets its own namespace (`ws_<id>`)
+- **Embedder interface** — pluggable `embedding.Embedder` abstraction; swap providers without changing callers
 - **MCP + Skills + SDKs** (`mcp-remote`, `npx skills add`, `@vectorizer/sdk` / `vectorizer-ai`)
 
 ### Design Goals
 
 1. **Zero hidden AI costs** — embeddings are configurable; the LLM brain is opt-in
 2. **Agent isolation** — workspaces map to separate ChromaDB collections, no cross-talk
-3. **Provider flexibility** — LM Studio (local), OpenAI-compatible APIs for both embedding and chat
+3. **Provider flexibility** — LM Studio (local), OpenAI-compatible APIs, Google AI Studio (cloud, free tier)
 4. **Docker-first** — one `docker compose up` runs the full stack
 
 ### What It Is NOT
@@ -66,6 +67,7 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
                     ┌──────────────────┐                  │
                     │ LM Studio /      │◀─────────────────┘
                     │ OpenAI-Compatible│
+                    │ Google AI Studio │
                     └──────────────────┘
 ```
 
@@ -76,7 +78,7 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 | **Config** | `config/` | Layered config: `env > .env > config.toml > defaults` (BurntSushi/toml) |
 | **Security** | `internal/security/` | JWT `w/p/ad` claims, HS256, `scripts/generate_jwt.go` |
 | **ChromaDB Client** | `internal/chromadb/` | ChromaDB v2 REST API wrapper (collections, upsert, query, get, heartbeat) |
-| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion (1536d `Qwen3-Embedding-4B` MRL, `dimensions` param, fallback `nomic-embed-text` 768d) |
+| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion via `Embedder` interface (Google AI Studio `text-embedding-004`/`005` 768d, OpenAI-compatible 1536d `Qwen3-Embedding-4B` MRL, `nomic-embed-text` 768d fallback) |
 | **LLM Brain** | `internal/llmbrain/` | Chat/summarize via `/chat/completions` (`ChatWithTemp`, `ChatWithHistory`, `prompts.go` AgentSystemPrompt) |
 | **Models** | `internal/models/` | Workspace, Session, Message (with `Metadata`), Peer, PeerCard, SearchRequest |
 | **Store** | `internal/store/` | Chunking, embed (`1536d`), upsert (retry), search (vector+BM25 RRF), conclusions, `reasoning.go` (`ws_<id>_reasoning`), peers, sessions, grep, TTL, scopes |
@@ -109,10 +111,11 @@ Layered config: `env > .env > config.toml > defaults` via `BurntSushi/toml`. Sec
 | `ChromaHost` | string | localhost | ChromaDB hostname |
 | `ChromaPort` | int | 8100 | ChromaDB port |
 | `DefaultAPIKey` | string | "" | API key for auth (empty = disabled) |
-| `EmbedProvider` | string | lm-studio | Embedding provider: "lm-studio" or "openai-compatible" |
+| `EmbedProvider` | string | lm-studio | Embedding provider: "lm-studio", "openai-compatible", or "google" |
 | `LmStudioURL` | string | http://localhost:1234/v1 | LM Studio endpoint |
 | `OAICompatibleURL` | string | "" | OpenAI-compatible embedding URL |
 | `OAIAPIKey` | string | "" | API key for OpenAI-compatible provider |
+| `GoogleAPIKey` | string | "" | Google AI Studio API key (for provider=google) |
 | `EmbedModel` | string | nomic-embed-text | Embedding model name |
 | `LLMEnabled` | bool | false | Enable LLM brain endpoints |
 | `LLMProvider` | string | lm-studio | LLM provider: "lm-studio" or "openai-compatible" |
@@ -147,21 +150,32 @@ Direct HTTP client for ChromaDB v2 REST API. No ORM, no abstraction layer — ju
 - HNSW parameters: `ef_construction=200`, `ef_search=128` for high recall
 - Collections are created with metadata tags (`workspace_id`, `session_id`) for filtering
 
-### 3.3 Embedding Service (`internal/embedding/service.go`)
+### 3.3 Embedding Service (`internal/embedding/`)
 
-Pluggable embedding provider. Supports any OpenAI-compatible `/embeddings` endpoint, including:
-- LM Studio local server (no API key needed)
-- OpenAI API (`text-embedding-3-small`, `text-embedding-3-large`)
-- Any other compatible provider (Cohere, Voyage AI, etc.)
+Pluggable embedding providers behind the `Embedder` interface (`interface.go`). Any caller (store, dreamer, admin) uses `embedding.Embedder` — never a concrete type.
 
-**Methods:**
-- `Embed(texts []string)` → batch embedding, returns `[][]float32`
-- `EmbedSingle(text string)` → convenience wrapper for single text
+**Providers:**
+- **OpenAI-compatible** (`service.go`) — LM Studio local server, OpenAI API, vLLM, any `/embeddings` endpoint
+- **Google AI Studio** (`google.go`) — `text-embedding-004`/`005`, batch (`batchEmbedContents`) and single (`embedContent`) endpoints, `outputDimensionality` param, 768d default
 
-**Response format:** Parses OpenAI-compatible response structure:
-```json
-{ "data": [{ "embedding": [0.1, 0.2, ...] }] }
+**Embedder interface:**
+```go
+type Embedder interface {
+    Embed(texts []string) ([]EmbeddingResult, error)
+    EmbedSingle(text string) ([]float32, error)
+    Model() string
+    Dimensions() int
+    SetModel(model string)
+    SetDimensions(d int)
+    SetBaseURL(url string)
+}
 ```
+
+**Provider selection** (`main.go`):
+- `EMBED_PROVIDER=google` + `GOOGLE_API_KEY` set → `NewGoogle(apiKey, model, dimensions)`
+- `EMBED_PROVIDER=openai-compatible` + `OAI_COMPATIBLE_URL` set → `NewWithDimensions(oaiURL, apiKey, model, dims)`
+- `EMBED_PROVIDER=openai-compatible` (no OAI URL) → fallback to `LM_STUDIO_URL`
+- Default (lm-studio) → `NewWithDimensions(lmStudioURL, "", model, dims)`
 
 ### 3.4 LLM Brain (`internal/llmbrain/service.go` + `prompts.go`)
 
@@ -210,7 +224,10 @@ Dependency injection and wiring:
 
 1. Load config from env vars
 2. Initialize ChromaDB client (with health check)
-3. Initialize embedding service based on provider config
+3. Initialize embedding service based on provider config:
+   - `google` + `GOOGLE_API_KEY` → `embedding.NewGoogle(...)`
+   - `openai-compatible` → `embedding.NewWithDimensions(...)`
+   - `lm-studio` (default) → `embedding.NewWithDimensions(lmStudioURL, ...)`
 4. Initialize store with chromadb + embedding dependencies
 5. Conditionally initialize LLM brain if `LLM_ENABLED=true`
 6. Create handlers, wire them to their dependencies
@@ -572,11 +589,13 @@ HTTP status codes:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `EMBED_PROVIDER` | No | `lm-studio` | Provider: `lm-studio` or `openai-compatible` |
+| `EMBED_PROVIDER` | No | `lm-studio` | Provider: `lm-studio`, `openai-compatible`, or `google` |
 | `LM_STUDIO_URL` | Conditional | `http://localhost:1234/v1` | LM Studio endpoint (required if provider=lm-studio) |
 | `OAI_COMPATIBLE_URL` | Conditional | *(empty)* | OpenAI-compatible URL (required if provider=openai-compatible) |
 | `OAI_API_KEY` | Conditional | *(empty)* | API key for OpenAI-compatible provider |
+| `GOOGLE_API_KEY` | Conditional | *(empty)* | Google AI Studio API key (required if provider=google) |
 | `EMBED_MODEL` | No | `nomic-embed-text` | Embedding model name |
+| `EMBED_DIMENSIONS` | No | `1536` | Embedding dimensions (1536 for Qwen3 MRL, 768 for Google) |
 
 **LLM Brain config:**
 
@@ -741,6 +760,11 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] gRPC interface alongside REST (`proto/vectorizer.proto` `AddMessage/Search/Chat/Health`, `vectorizerpb`, `internal/grpc`, `GRPC_PORT` 50051)
 - [x] Scopes (`ws_<id>_scopes`, `POST/GET /workspaces/:id/scopes`, `POST/:scope_id/sessions`, `DELETE/:scope_id/sessions/:sid`, `GET/:scope_id/status`)
 - [x] Keys (`POST/GET /workspaces/:id/keys`, `POST/GET /keys`, `sk_*`)
+
+### Phase 6: Provider Abstraction — done
+- [x] Embedder interface (`internal/embedding/interface.go`) — `Embedder` contract for all providers, callers never reference concrete types
+- [x] Google AI Studio provider (`internal/embedding/google.go`) — `text-embedding-004`/`005` 768d, batch `batchEmbedContents` + single `embedContent`, `GOOGLE_API_KEY`
+- [x] Config + Docker wiring — `EMBED_PROVIDER=google`, `GOOGLE_API_KEY` env passthrough, Go 1.25 builder image
 
 ---
 

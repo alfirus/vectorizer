@@ -16,6 +16,8 @@ A lightweight, self-hosted memory server for AI agents. Stores messages as embed
 - **Reasoning graph + deriver** — `ws_<id>_reasoning` (premise edges, BFS `GetReasoningChain`), async deriver `2s/5msg` batch → `summarize→CreateConclusion+AddReasoningEdge`
 - **Conclusions + representations + surprisal dreamer** — offline `summarize→embed 1536d→ws_<id>_conclusions` every `3h` with surprisal gate (`distance <0.15` skip)
 - **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A via `/chat/completions`
+- **Embedder interface** — pluggable `embedding.Embedder` abstraction; swap providers without changing callers
+- **Google AI Studio** — `EMBED_PROVIDER=google`, `GOOGLE_API_KEY`, `text-embedding-004` (768d default, batch+single)
 - **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt/main.go`, Vectorizer parity)
 - **Layered config** — `env > .env > config.toml > defaults` (`config.toml.example`, `BurntSushi/toml`)
 - **Docker-ready** — one `docker compose up` (Chroma `1.0.0`, `qwen-embed` vLLM `1536d`, healthchecks, `qwen_cache`)
@@ -28,8 +30,9 @@ A lightweight, self-hosted memory server for AI agents. Stores messages as embed
 Agent → Vectorizer API → ChromaDB (vectors) + Embedding Service
   │                        │
   ├─ POST /messages       ├─ Qwen/Qwen3-Embedding-4B (1536d MRL, nomic-embed-text 768d fallback) (local)
-  ├─ GET  /search         └─ text-embedding-3-small (OpenAI)
-  └─ POST /brain/ask      └─ qwen3:8b, gpt-4o-mini, etc.
+  ├─ GET  /search         ├─ text-embedding-004 / text-embedding-005 (Google AI Studio)
+  └─ POST /brain/ask      ├─ text-embedding-3-small (OpenAI)
+                          └─ qwen3:8b, gpt-4o-mini, etc. (LLM brain)
 ```
 
 ## Quick Start
@@ -68,9 +71,13 @@ All settings via `.env` file or environment variables. Key options:
 | `CHROMA_HOST` | `localhost` | ChromaDB hostname |
 | `CHROMA_PORT` | `8100` | ChromaDB port |
 | `DEFAULT_API_KEY` | *(empty)* | API key for auth (set to disable) |
-| `EMBED_PROVIDER` | `lm-studio` | Embedding provider: `lm-studio` or `openai-compatible` |
+| `EMBED_PROVIDER` | `lm-studio` | Embedding provider: `lm-studio`, `openai-compatible`, or `google` |
 | `LM_STUDIO_URL` | `http://localhost:1234/v1` | LM Studio endpoint |
+| `OAI_COMPATIBLE_URL` | *(empty)* | OpenAI-compatible embedding URL |
+| `OAI_API_KEY` | *(empty)* | API key for OpenAI-compatible provider |
+| `GOOGLE_API_KEY` | *(empty)* | Google AI Studio API key (for `google` provider) |
 | `EMBED_MODEL` | `Qwen/Qwen3-Embedding-4B` | Embedding model name |
+| `EMBED_DIMENSIONS` | `1536` | Embedding dimensions (1536 for Qwen3 MRL, 768 for Google) |
 | `LLM_ENABLED` | `false` | Enable LLM brain (summarize/ask) |
 | `LLM_PROVIDER` | `lm-studio` | LLM provider: `lm-studio` or `openai-compatible` |
 | `LLM_MODEL` | `qwen3:8b` | LLM model name |
@@ -231,7 +238,9 @@ Each workspace maps to a separate ChromaDB collection: `ws_<workspace_id>`. This
 | Model | Provider | Dimensions | Notes |
 |-------|----------|------------|-------|
 | `Qwen/Qwen3-Embedding-4B` | vLLM | 1536 | MRL (primary) |
-| `nomic-embed-text` | LM Studio | 768 | Fallback (CPU) | Best local option, fast |
+| `nomic-embed-text` | LM Studio | 768 | Fallback (CPU) — fast local option |
+| `text-embedding-004` | Google AI Studio | 768 | Batch+single embed, free tier |
+| `text-embedding-005` | Google AI Studio | 768 | Latest Google model |
 | `text-embedding-3-small` | OpenAI | 1536 | Good quality, cloud |
 | `text-embedding-3-large` | OpenAI | 3072 | Highest quality, slower |
 
@@ -376,7 +385,10 @@ vectorizer/
 ├── config/           # Layered config (env>.env>config.toml)
 ├── internal/
 │   ├── chromadb/     # ChromaDB v2 API client
-│   ├── embedding/    # Embedding service (Qwen3 1536d MRL, dimensions param)
+│   ├── embedding/    # Embedding providers (Embedder interface, Google AI Studio, OpenAI-compatible)
+│   │   ├── interface.go  # Embedder interface definition
+│   │   ├── google.go     # Google AI Studio provider (batch+single, text-embedding-004)
+│   │   └── service.go    # OpenAI-compatible provider (LM Studio, vLLM, etc.)
 │   ├── llmbrain/     # LLM brain + prompts.go (AgentSystemPrompt)
 │   ├── deriver/      # Async deriver
 │   ├── dreamer/      # Surprisal dreamer (3h, 1536d)
@@ -393,10 +405,10 @@ vectorizer/
 ├── sdks/             # TS + Python SDKs
 ├── evals/            # Eval harness (LongMemEval, reasoning-grounded)
 ├── main.go           # Entry point, wiring, auth, rate limit, gRPC
-├── Dockerfile        # Container build (exposes 8091+50051)
+├── Dockerfile        # Container build (Go 1.25, exposes 8091+50051)
 ├── docker-compose.yml# Full stack (Vectorizer + ChromaDB + qwen-embed vLLM)
 ├── Makefile          # Build/run commands
-└── .env.example      # Configuration template (1536d)
+└── .env.example      # Configuration template
 ```
 
 ## License
