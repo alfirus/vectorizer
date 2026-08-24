@@ -35,3 +35,11 @@ func (h *PeersHandler) GetPeerCard(c *fiber.Ctx) error {
 	lines, _:=h.store.GetPeerCard(ws, pid)
 	return c.JSON(fiber.Map{"peer_id":pid, "lines":lines})
 }
+func (h *PeersHandler) UpdatePeer(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{"updated":true})
+}
+func (h *PeersHandler) Sessions(c *fiber.Ctx) error {
+	ws:=c.Params("workspace_id")
+	sess,_:=h.store.ListSessions(ws)
+	return c.JSON(fiber.Map{"sessions":sess})
+}

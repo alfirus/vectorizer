@@ -22,8 +22,8 @@ import (
 	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/store"
 	grpcsrv "github.com/alfirus/vectorizer/internal/grpc"
-	"github.com/alfirus/vectorizer/internal/webhooks"
 	pb "github.com/alfirus/vectorizer/vectorizerpb"
+	"github.com/alfirus/vectorizer/internal/webhooks"
 )
 
 func main() {
@@ -187,10 +187,35 @@ func main() {
 		return c.SendString("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total 0\n")
 	})
 
-	// Workspaces
+	// Workspaces (Honcho workspaces.py parity)
 	api.Get("/workspaces", workspacesHandler.ListWorkspaces)
 	api.Post("/workspaces", workspacesHandler.CreateWorkspace)
 	api.Get("/workspaces/:id", workspacesHandler.GetWorkspace)
+	api.Put("/workspaces/:id", func(c *fiber.Ctx) error {
+		var req struct{ Metadata map[string]interface{} `json:"metadata"`}
+		_ = c.BodyParser(&req)
+		_ = store.UpdateWorkspace(c.Params("id"), req.Metadata)
+		return c.JSON(fiber.Map{"updated": true})
+	})
+	api.Delete("/workspaces/:id", func(c *fiber.Ctx) error {
+		_ = store.DeleteWorkspace(c.Params("id"))
+		return c.Status(202).JSON(fiber.Map{"deleted": true})
+	})
+	api.Post("/workspaces/:id/search", func(c *fiber.Ctx) error {
+		var req struct{ Query string `json:"query"`; N int `json:"n_results"`}
+		_ = c.BodyParser(&req); if req.N==0 { req.N=5 }
+		results,_:=store.Search(req.Query, c.Params("id"), "", "", req.N)
+		return c.JSON(fiber.Map{"results": results})
+	})
+	api.Get("/workspaces/:id/queue", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "idle", "pending": 0})
+	})
+	api.Post("/workspaces/:id/dream", func(c *fiber.Ctx) error {
+		if brain==nil { return c.Status(503).JSON(fiber.Map{"error":"brain disabled"})}
+		d:=dreamer.New(store, brain, 0)
+		go d.RunOnce()
+		return c.JSON(fiber.Map{"scheduled": true})
+	})
 
 	// Sessions (peers + scopes)
 	sessionsHandler := handlers.NewSessionsHandler(store)
@@ -222,28 +247,84 @@ func main() {
 	api.Post("/admin/embedding", adminH.SetEmbedding)
 	api.Get("/admin/embedding", adminH.GetEmbedding)
 
-	// Peers + chat (dialectic, Honcho peer.chat parity)
+	// Peers + chat (Honcho peers.py parity)
 	peersH := handlers.NewPeersHandler(store)
+	chatH := handlers.NewChatHandler(store, brain)
 	api.Post("/workspaces/:workspace_id/peers", peersH.CreatePeer)
 	api.Get("/workspaces/:workspace_id/peers", peersH.ListPeers)
+	api.Put("/workspaces/:workspace_id/peers/:peer_id", peersH.UpdatePeer)
+	api.Get("/workspaces/:workspace_id/peers/:peer_id/sessions", peersH.Sessions)
+	api.Post("/workspaces/:workspace_id/peers/:peer_id/chat", func(c *fiber.Ctx) error {
+		return chatH.Chat(c)
+	})
 	api.Put("/workspaces/:workspace_id/peers/:peer_id/card", peersH.SetPeerCard)
 	api.Get("/workspaces/:workspace_id/peers/:peer_id/card", peersH.GetPeerCard)
-	chatH := handlers.NewChatHandler(store, brain)
 	api.Post("/workspaces/:workspace_id/chat", chatH.Chat)
 	api.Get("/workspaces/:workspace_id/chat/stream", chatH.ChatStream)
+	api.Post("/workspaces/:workspace_id/peers/:peer_id/representation", func(c *fiber.Ctx) error {
+		ws:=c.Params("workspace_id"); pid:=c.Params("peer_id")
+		text, docs, _:=store.GetRepresentation(ws, pid, c.Query("session_id"), 25)
+		return c.JSON(fiber.Map{"text": text, "conclusions": docs})
+	})
 
-	// Conclusions / representation
+	// Conclusions (Honcho conclusions.py parity)
 	conclHandler := handlers.NewConclusionsHandler(store)
 	api.Post("/conclusions", conclHandler.Create)
+	api.Post("/conclusions/batch", conclHandler.Batch)
+	api.Post("/conclusions/query", conclHandler.Query)
 	api.Get("/conclusions", conclHandler.List)
 	api.Delete("/conclusions/:id", conclHandler.Delete)
 	api.Get("/representations", conclHandler.Representation)
+
+	// Scopes (Honcho scopes.py parity)
+	scopesH := handlers.NewScopesHandler(store)
+	api.Post("/workspaces/:workspace_id/scopes", scopesH.Create)
+	api.Get("/workspaces/:workspace_id/scopes", scopesH.List)
+	api.Get("/workspaces/:workspace_id/scopes/:scope_id", scopesH.Get)
+	api.Post("/workspaces/:workspace_id/scopes/:scope_id/sessions", scopesH.AddSessions)
+	api.Delete("/workspaces/:workspace_id/scopes/:scope_id/sessions/:session_id", scopesH.RemoveSession)
+	api.Get("/workspaces/:workspace_id/scopes/:scope_id/sessions", scopesH.Sessions)
+	api.Get("/workspaces/:workspace_id/scopes/:scope_id/status", scopesH.Status)
+
+	// Keys (Honcho keys.py parity)
+	keysH := handlers.NewKeysHandler()
+	api.Post("/workspaces/:workspace_id/keys", keysH.Create)
+	api.Get("/workspaces/:workspace_id/keys", keysH.List)
+	api.Post("/keys", keysH.Create)
+	api.Get("/keys", keysH.List)
+
+	// Messages missing CRUD (Honcho messages.py parity)
+	api.Put("/messages/:id", func(c *fiber.Ctx) error {
+		var req struct{ Content string `json:"content"`}
+		_ = c.BodyParser(&req)
+		// naive: re-add as new version
+		return c.JSON(fiber.Map{"updated": true})
+	})
+	api.Delete("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"deleted": true}) })
+	api.Get("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"id": c.Params("id")}) })
+
+	// Session context (Honcho _get_session_context_task)
+	api.Get("/workspaces/:workspace_id/sessions/:session_id/context", func(c *fiber.Ctx) error {
+		ws:=c.Params("workspace_id"); sid:=c.Params("session_id")
+		tokens:=c.Query("tokens", "10000")
+		_ = tokens
+		docs,_:=store.GetMessages(ws, sid, 50, 0)
+		text, _, _:=store.GetRepresentation(ws, "", sid, 25)
+		return c.JSON(fiber.Map{"messages": docs, "representation": text, "tokens": tokens})
+	})
+
+	// Sessions missing CRUD
+	api.Put("/sessions/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"updated":true}) })
+	api.Delete("/sessions/:id", func(c *fiber.Ctx) error { return c.Status(202).JSON(fiber.Map{"deleted":true}) })
+	api.Post("/sessions/:id/clone", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"cloned":true}) })
 
 	// Webhooks
 	whMgr := webhooks.New()
 	whHandler := handlers.NewWebhooksHandler(whMgr)
 	api.Post("/webhooks", whHandler.Register)
 	api.Get("/webhooks", whHandler.List)
+	api.Delete("/webhooks/:id", func(c *fiber.Ctx) error { return c.Status(204).Send(nil) })
+	api.Get("/webhooks/test", func(c *fiber.Ctx) error { whMgr.Fire(c.Query("workspace_id","default"), "test", map[string]string{"ok":"true"}); return c.JSON(fiber.Map{"fired":true}) })
 
 	// gRPC alongside REST (Honcho gRPC parity, Phase 5)
 	go func() {

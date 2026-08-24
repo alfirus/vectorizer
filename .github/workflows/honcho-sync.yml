@@ -1,0 +1,14 @@
+name: honcho-sync
+on:
+  schedule:
+    - cron: "0 9 * * 1"  # weekly Monday
+  workflow_dispatch:
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - run: go run ./scripts/honcho_sync
+      - run: echo "If gap detected, open issue or PR via opencode/hermes agent. See scripts/honcho_sync/main.go"

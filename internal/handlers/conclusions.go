@@ -34,3 +34,19 @@ func (h *ConclusionsHandler) Representation(c *fiber.Ctx) error {
 	text, docs, _:=h.store.GetRepresentation(ws, peer, sess, max)
 	return c.JSON(fiber.Map{"representation":text, "conclusions":docs})
 }
+func (h *ConclusionsHandler) Batch(c *fiber.Ctx) error {
+	var req struct{ Conclusions []struct{ WorkspaceID string `json:"workspace_id"`; PeerID string `json:"peer_id"`; Content string `json:"content"`} `json:"conclusions"`}
+	_ = c.BodyParser(&req)
+	var ids []string
+	for _, concl := range req.Conclusions {
+		id,_:=h.store.CreateConclusion(concl.WorkspaceID, concl.PeerID, concl.Content, nil)
+		ids=append(ids, id)
+	}
+	return c.JSON(fiber.Map{"ids":ids})
+}
+func (h *ConclusionsHandler) Query(c *fiber.Ctx) error {
+	var req struct{ WorkspaceID string `json:"workspace_id"`; Query string `json:"query"`; N int `json:"n_results"`}
+	_ = c.BodyParser(&req); if req.N==0 { req.N=5 }
+	results,_:=h.store.QueryConclusions(req.WorkspaceID, req.Query, req.N)
+	return c.JSON(fiber.Map{"results":results})
+}
