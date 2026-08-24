@@ -93,12 +93,17 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 		embeddingVectors[i] = e.Vector
 	}
 
-	// Upsert to ChromaDB
-	if err := s.chroma.UpsertDocuments(coll.ID, ids, documents, metadatas, embeddingVectors); err != nil {
-		return fmt.Errorf("upsert documents: %w", err)
+	// Upsert with retry (phase 4)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := s.chroma.UpsertDocuments(coll.ID, ids, documents, metadatas, embeddingVectors); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			time.Sleep(time.Duration(100*(1<<attempt)) * time.Millisecond)
+		}
 	}
-
-	return nil
+	return fmt.Errorf("upsert documents: %w", lastErr)
 }
 
 // Search performs semantic search across messages.

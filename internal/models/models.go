@@ -15,8 +15,9 @@ type Workspace struct {
 
 func NewWorkspace(name string) *Workspace {
 	return &Workspace{
-		ID:    uuid.New().String(),
-		Name:  name,
+		ID:        uuid.New().String(),
+		Name:      name,
+		CreatedAt: time.Now().UTC(),
 	}
 }
 
@@ -33,6 +34,7 @@ func NewSession(workspaceID, title string) *Session {
 		ID:          uuid.New().String(),
 		WorkspaceID: workspaceID,
 		Title:       title,
+		CreatedAt:   time.Now().UTC(),
 	}
 }
 
@@ -53,6 +55,7 @@ func NewMessage(workspaceID, sessionID, role, content string) *Message {
 		SessionID:   sessionID,
 		Role:        role,
 		Content:     content,
+		CreatedAt:   time.Now().UTC(),
 	}
 }
 

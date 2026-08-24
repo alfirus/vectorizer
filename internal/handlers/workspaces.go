@@ -5,57 +5,48 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/alfirus/vectorizer/internal/models"
+	"github.com/alfirus/vectorizer/internal/store"
 )
 
-// WorkspacesHandler handles workspace CRUD operations.
-type WorkspacesHandler struct{}
+type WorkspacesHandler struct{ store *store.Store }
 
-func NewWorkspacesHandler() *WorkspacesHandler {
-	return &WorkspacesHandler{}
-}
+func NewWorkspacesHandler(s *store.Store) *WorkspacesHandler { return &WorkspacesHandler{store: s} }
 
-// CreateWorkspace creates a new workspace (namespace for agent memory isolation).
 func (h *WorkspacesHandler) CreateWorkspace(c *fiber.Ctx) error {
-	var req struct {
-		Name string `json:"name"`
-	}
+	var req struct{ Name string `json:"name"` }
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
-
 	if req.Name == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "name is required",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name is required"})
 	}
-
-	workspace := models.NewWorkspace(req.Name)
-
-	return c.Status(fiber.StatusCreated).JSON(workspace)
+	ws := models.NewWorkspace(req.Name)
+	if err := h.store.EnsureWorkspace(ws.ID); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to create workspace"})
+	}
+	return c.Status(fiber.StatusCreated).JSON(ws)
 }
 
-// ListWorkspaces returns all workspaces.
 func (h *WorkspacesHandler) ListWorkspaces(c *fiber.Ctx) error {
-	// TODO: Implement workspace persistence (SQLite/Postgres)
-	// For now, return empty list
-	return c.JSON(fiber.Map{
-		"workspaces": []models.Workspace{},
-	})
+	ids, err := h.store.ListWorkspaces()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list workspaces"})
+	}
+	workspaces := make([]models.Workspace, len(ids))
+	for i, id := range ids {
+		workspaces[i] = models.Workspace{ID: id}
+	}
+	return c.JSON(fiber.Map{"workspaces": workspaces})
 }
 
-// GetWorkspace returns a single workspace by ID.
 func (h *WorkspacesHandler) GetWorkspace(c *fiber.Ctx) error {
 	id := c.Params("id")
 	if _, err := uuid.Parse(id); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid workspace ID",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid workspace ID"})
 	}
-
-	// TODO: Implement workspace lookup from database
-	return c.JSON(models.Workspace{
-		ID: id,
-	})
+	stats, err := h.store.GetWorkspaceStats(id)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to get workspace"})
+	}
+	return c.JSON(fiber.Map{"id": id, "stats": stats})
 }

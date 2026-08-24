@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -74,11 +76,11 @@ func main() {
 	}
 
 	// Initialize handlers
-	workspacesHandler := handlers.NewWorkspacesHandler()
+	workspacesHandler := handlers.NewWorkspacesHandler(store)
 	messagesHandler := handlers.NewMessagesHandler(store)
 	var brainHandler *handlers.BrainHandler
 	if brain != nil {
-		brainHandler = handlers.NewBrainHandler(brain)
+		brainHandler = handlers.NewBrainHandler(brain, store)
 	}
 
 	// Initialize Fiber app
@@ -125,17 +127,40 @@ func main() {
 		})
 	}
 
+	// Rate limiter (phase 4) - simple token bucket 10/s per IP or API key
+	rl := newRateLimiter(10, time.Second)
+	app.Use(func(c *fiber.Ctx) error {
+		key := c.Get("X-API-Key")
+		if key == "" {
+			key = c.IP()
+		}
+		if !rl.Allow(key) {
+			return c.Status(429).JSON(fiber.Map{"error": "rate limit exceeded"})
+		}
+		return c.Next()
+	})
+
 	// Routes
 	api := app.Group("/api/v1")
 
-	// Health check (no auth required)
+	// Health check (no auth required) - includes ChromaDB
 	api.Get("/health", func(c *fiber.Ctx) error {
+		chromaStatus := "ok"
+		if err := chromaClient.Heartbeat(); err != nil {
+			chromaStatus = "unavailable"
+		}
+		status := "ok"
+		if chromaStatus != "ok" {
+			status = "degraded"
+		}
 		return c.JSON(fiber.Map{
-			"status": "ok",
-			"name":   "vectorizer",
-			"version": "0.1.0",
-			"llm_enabled": cfg.LLMEnabled,
+			"status": status, "name": "vectorizer", "version": "0.1.0",
+			"llm_enabled": cfg.LLMEnabled, "chromadb": chromaStatus, "embedding_model": cfg.EmbedModel,
 		})
+	})
+	api.Get("/metrics", func(c *fiber.Ctx) error {
+		c.Set("Content-Type", "text/plain")
+		return c.SendString("# HELP vectorizer_up 1 if up\nvectorizer_up 1\n")
 	})
 
 	// Workspaces
@@ -150,10 +175,14 @@ func main() {
 	api.Get("/messages/search", messagesHandler.SearchMessagesSimple)
 	api.Get("/workspaces/:id/stats", messagesHandler.GetWorkspaceStats)
 
+	// Messages retrieval
+	api.Get("/messages", messagesHandler.ListMessages)
+
 	// LLM Brain (optional, only if enabled)
 	if brainHandler != nil {
 		brain := api.Group("/brain")
 		brain.Post("/summarize", brainHandler.Summarize)
+		brain.Get("/summarize/stream", brainHandler.SummarizeStream)
 		brain.Post("/ask", brainHandler.Ask)
 	}
 
@@ -163,4 +192,19 @@ func main() {
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+type rateLimiter struct {
+	mu sync.Mutex; tokens map[string][]time.Time; limit int; window time.Duration
+}
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{tokens: make(map[string][]time.Time), limit: limit, window: window}
+}
+func (r *rateLimiter) Allow(key string) bool {
+	r.mu.Lock(); defer r.mu.Unlock()
+	now := time.Now(); cutoff := now.Add(-r.window)
+	times := r.tokens[key]; filtered := times[:0]
+	for _, t := range times { if t.After(cutoff) { filtered = append(filtered, t) } }
+	if len(filtered) >= r.limit { r.tokens[key] = filtered; return false }
+	r.tokens[key] = append(filtered, now); return true
 }

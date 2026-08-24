@@ -263,6 +263,51 @@ func (c *Client) DeleteByFilter(collectionID string, where map[string]interface{
 	return nil
 }
 
+// GetDocuments fetches documents with optional where filter and pagination.
+func (c *Client) GetDocuments(collectionID string, where map[string]interface{}, limit, offset int) ([]map[string]interface{}, error) {
+	body := map[string]interface{}{}
+	if where != nil {
+		body["where"] = where
+	}
+	if limit > 0 {
+		body["limit"] = limit
+	}
+	if offset > 0 {
+		body["offset"] = offset
+	}
+	body["include"] = []string{"documents", "metadatas"}
+	url := c.collectionsBase() + "/" + collectionID + "/get"
+	resp, err := c.doJSON(http.MethodPost, url, body)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Ids       []string                 `json:"ids"`
+		Documents []string                 `json:"documents"`
+		Metadatas []map[string]interface{} `json:"metadatas"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, err
+	}
+	out := make([]map[string]interface{}, len(result.Ids))
+	for i := range result.Ids {
+		m := map[string]interface{}{"id": result.Ids[i]}
+		if i < len(result.Documents) {
+			m["document"] = result.Documents[i]
+		}
+		if i < len(result.Metadatas) {
+			m["metadata"] = result.Metadatas[i]
+		}
+		out[i] = m
+	}
+	return out, nil
+}
+
+func (c *Client) Heartbeat() error {
+	_, err := c.doJSON(http.MethodGet, c.BaseURL+"/api/v2/heartbeat", nil)
+	return err
+}
+
 // doJSON performs an HTTP request and returns the response body as JSON bytes.
 func (c *Client) doJSON(method, url string, body interface{}) ([]byte, error) {
 	var reqBody io.Reader

@@ -210,6 +210,20 @@ func (h *MessagesHandler) SearchMessagesSimple(c *fiber.Ctx) error {
 	})
 }
 
+func (h *MessagesHandler) ListMessages(c *fiber.Ctx) error {
+	wsID := c.Query("workspace_id")
+	if wsID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id is required"})
+	}
+	limit, _ := strconv.Atoi(c.Query("limit", "20"))
+	offset, _ := strconv.Atoi(c.Query("offset", "0"))
+	docs, err := h.store.GetMessages(wsID, c.Query("session_id"), limit, offset)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list messages"})
+	}
+	return c.JSON(fiber.Map{"messages": docs, "count": len(docs)})
+}
+
 // GetWorkspaceStats returns stats for a workspace.
 func (h *MessagesHandler) GetWorkspaceStats(c *fiber.Ctx) error {
 	workspaceID := c.Params("id")
