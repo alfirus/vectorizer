@@ -13,10 +13,12 @@ import (
 
 	"github.com/alfirus/vectorizer/config"
 	"github.com/alfirus/vectorizer/internal/chromadb"
+	"github.com/alfirus/vectorizer/internal/dreamer"
 	"github.com/alfirus/vectorizer/internal/embedding"
 	"github.com/alfirus/vectorizer/internal/handlers"
 	"github.com/alfirus/vectorizer/internal/llmbrain"
 	"github.com/alfirus/vectorizer/internal/store"
+	"github.com/alfirus/vectorizer/internal/webhooks"
 )
 
 func main() {
@@ -182,6 +184,26 @@ func main() {
 
 	// Messages retrieval
 	api.Get("/messages", messagesHandler.ListMessages)
+
+	// Conclusions / representation
+	conclHandler := handlers.NewConclusionsHandler(store)
+	api.Post("/conclusions", conclHandler.Create)
+	api.Get("/conclusions", conclHandler.List)
+	api.Delete("/conclusions/:id", conclHandler.Delete)
+	api.Get("/representations", conclHandler.Representation)
+
+	// Webhooks
+	whMgr := webhooks.New()
+	whHandler := handlers.NewWebhooksHandler(whMgr)
+	api.Post("/webhooks", whHandler.Register)
+	api.Get("/webhooks", whHandler.List)
+
+	// Dreamer (offline, same 768d)
+	if brain != nil {
+		d := dreamer.New(store, brain, 10*time.Minute)
+		d.Start()
+		defer d.Stop()
+	}
 
 	// LLM Brain (optional, only if enabled)
 	if brainHandler != nil {
