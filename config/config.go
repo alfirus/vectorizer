@@ -30,6 +30,10 @@ type Config struct {
 	TTLHours       int    `env:"TTL_HOURS"` // 0 = disabled
 	WorkspaceConfig string `env:"WORKSPACE_CONFIG"` // json overrides
 
+	// Auth (Honcho-compatible JWT)
+	AuthUseAuth   bool   `env:"AUTH_USE_AUTH"`
+	AuthJWTSecret string `env:"AUTH_JWT_SECRET"`
+
 	// ChromaDB config
 	ChromaTenant     string `env:"CHROMA_TENANT"`
 	ChromaDatabase   string `env:"CHROMA_DATABASE"`
@@ -56,6 +60,9 @@ func Load() *Config {
 		LLMModel:          getEnvString("LLM_MODEL", "qwen3:8b"),
 		
 		TTLHours:       getEnvInt("TTL_HOURS", 0),
+
+		AuthUseAuth:    envBool("AUTH_USE_AUTH", false),
+		AuthJWTSecret:  os.Getenv("AUTH_JWT_SECRET"),
 
 		ChromaTenant:     getEnvString("CHROMA_TENANT", "default_tenant"),
 		ChromaDatabase:   getEnvString("CHROMA_DATABASE", "default_database"),

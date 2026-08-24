@@ -80,9 +80,11 @@ func (s *Service) Summarize(req SummarizeRequest) (*SummarizeResponse, error) {
 	return &SummarizeResponse{Summary: result.Choices[0].Message.Content}, nil
 }
 
-func (s *Service) Chat(system, context, question string) (string, error) {
+func (s *Service) Chat(system, context, question string) (string, error) { return s.ChatWithTemp(system, context, question, 0.3) }
+func (s *Service) ChatWithTemp(system, context, question string, temp float32) (string, error) {
+	if temp==0 { temp=0.3 }
 	msgs := []map[string]interface{}{{"role": "system", "content": system}, {"role": "user", "content": fmt.Sprintf("Context:\n%s\n\nQuestion: %s", context, question)}}
-	body := map[string]interface{}{"model": s.model, "messages": msgs, "temperature": 0.3}
+	body := map[string]interface{}{"model": s.model, "messages": msgs, "temperature": temp}
 	respBody, err := s.doJSON(http.MethodPost, "/chat/completions", body)
 	if err != nil { return "", err }
 	var result struct{ Choices []struct{ Message struct{ Content string `json:"content"`} `json:"message"`} `json:"choices"`}

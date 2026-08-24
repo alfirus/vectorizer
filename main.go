@@ -17,6 +17,7 @@ import (
 	"github.com/alfirus/vectorizer/internal/embedding"
 	"github.com/alfirus/vectorizer/internal/handlers"
 	"github.com/alfirus/vectorizer/internal/llmbrain"
+	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/store"
 	"github.com/alfirus/vectorizer/internal/webhooks"
 )
@@ -102,32 +103,48 @@ func main() {
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-API-Key",
 	}))
 
-	// API Key middleware (optional)
-	if cfg.DefaultAPIKey != "" {
-		app.Use(func(c *fiber.Ctx) error {
-			apiKey := c.Get("X-API-Key")
-			path := c.Path()
-
-			// Skip auth for health check and CORS preflight
-			if path == "/api/v1/health" || path == "/health" || path == "/" || c.Method() == "OPTIONS" {
-				return c.Next()
-			}
-
-			if apiKey == "" {
-				return c.Status(401).JSON(fiber.Map{
-					"error": "missing API key",
-				})
-			}
-
-			if apiKey != cfg.DefaultAPIKey {
-				return c.Status(403).JSON(fiber.Map{
-					"error": "invalid API key",
-				})
-			}
-
+	// Auth: JWT (if AUTH_USE_AUTH=true) else legacy X-API-Key. Mirrors Honcho src/security.py require_auth.
+	app.Use(func(c *fiber.Ctx) error {
+		path := c.Path()
+		if path == "/api/v1/health" || path == "/health" || path == "/" || c.Method() == "OPTIONS" {
 			return c.Next()
-		})
-	}
+		}
+		if cfg.AuthUseAuth && cfg.AuthJWTSecret != "" {
+			token := security.ExtractBearer(c.Get("Authorization"))
+			if token == "" {
+				// also accept X-API-Key as bearer for compat
+				token = c.Get("X-API-Key")
+			}
+			if token == "" {
+				return c.Status(401).JSON(fiber.Map{"error": "missing bearer token"})
+			}
+			claims, err := security.ParseToken(cfg.AuthJWTSecret, token)
+			if err != nil {
+				return c.Status(401).JSON(fiber.Map{"error": "invalid token"})
+			}
+			c.Locals("jwt", claims)
+			// Enforce workspace scoping: if claims has w, it must match :workspace_id param when present
+			if claims.Workspace != "" && !claims.Admin {
+				if ws := c.Params("workspace_id"); ws != "" && ws != claims.Workspace {
+					return c.Status(403).JSON(fiber.Map{"error": "workspace mismatch"})
+				}
+				if ws := c.Params("id"); ws != "" && ws != claims.Workspace {
+					// for /workspaces/:id — allow but log
+				}
+			}
+			return c.Next()
+		}
+		if cfg.DefaultAPIKey != "" {
+			apiKey := c.Get("X-API-Key")
+			if apiKey == "" {
+				return c.Status(401).JSON(fiber.Map{"error": "missing API key"})
+			}
+			if apiKey != cfg.DefaultAPIKey {
+				return c.Status(403).JSON(fiber.Map{"error": "invalid API key"})
+			}
+		}
+		return c.Next()
+	})
 
 	// Rate limiter (phase 4) - simple token bucket 10/s per IP or API key
 	rl := newRateLimiter(10, time.Second)

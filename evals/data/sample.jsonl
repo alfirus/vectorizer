@@ -1,0 +1,2 @@
+{"workspace_id":"eval-ws","session_id":"s1","role":"user","content":"Alice prefers concise bullet points over paragraphs."}
+{"workspace_id":"eval-ws","query":"How does Alice prefer answers formatted?","expected":"bullet"}

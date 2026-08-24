@@ -57,9 +57,23 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	ctx := strings.Join(ctxParts, "\n\n")
 	if len(ctx) > 8000 { ctx = ctx[:8000] }
 
-	// Agentic tool-aware prompt (simplified vs Honcho dialectic/core.py)
-	system := fmt.Sprintf("You are answering from %s's perspective about %s. Use provided context. If peer cards exist, they are constructed summaries from same observations.", observer, observed)
-	resp, err := h.brain.Chat(system, ctx, req.Query)
+	level := strings.ToLower(req.ReasoningLevel)
+	if level == "" { level = "low" }
+	nResults := map[string]int{"none":1,"low":5,"medium":10,"high":15,"max":20}[level]
+	if nResults==0 { nResults=5 }
+	// If level requests more, redo search with larger k
+	if nResults > 5 {
+		if results, err := h.store.Search(req.Query, ws, req.SessionID, "", nResults); err == nil {
+			ctxParts = ctxParts[:0]
+			if lines, _ := h.store.GetPeerCard(ws, observed); len(lines)>0 { ctxParts = append(ctxParts, fmt.Sprintf("Peer card for %s:\n%s", observed, strings.Join(lines, "\n"))) }
+			for _, r := range results { ctxParts = append(ctxParts, r.Document) }
+			ctx = strings.Join(ctxParts, "\n\n")
+			if len(ctx) > 12000 { ctx = ctx[:12000] }
+		}
+	}
+	temperature := map[string]float32{"none":0.1,"low":0.3,"medium":0.5,"high":0.7,"max":0.9}[level]
+	system := fmt.Sprintf("You are answering from %s's perspective about %s. Use provided context. If peer cards exist, they are constructed summaries from same observations. Reasoning level: %s.", observer, observed, level)
+	resp, err := h.brain.ChatWithTemp(system, ctx, req.Query, temperature)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "chat failed: "+err.Error()})
 	}
