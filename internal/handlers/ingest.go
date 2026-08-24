@@ -33,7 +33,7 @@ func (h *IngestHandler) Upload(c *fiber.Ctx) error {
 
 func (h *IngestHandler) ingestText(ws, sess, text string) error {
 	msg:=models.NewMessage(ws, sess, "system", text)
-	// store handles chunking + 768d
+	// store handles chunking + 1536d (Qwen3)
 	if err:=h.store.AddMessage(msg, text); err!=nil { return fiber.NewError(500, "ingest failed") }
 	return nil
 }

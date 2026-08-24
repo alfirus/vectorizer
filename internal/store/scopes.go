@@ -12,7 +12,7 @@ func (s *Store) CreateScope(workspaceID, scopeName string, sessionIDs []string) 
 	coll, err := s.chroma.EnsureCollection(scopeCollection(workspaceID), map[string]interface{}{"workspace_id": workspaceID})
 	if err != nil { return err }
 	meta := map[string]interface{}{"scope_name": scopeName, "workspace_id": workspaceID, "sessions": strings.Join(sessionIDs, ","), "created_at": time.Now().UTC().Format(time.RFC3339)}
-	dummy := make([]float32, 768)
+	dummy := s.dummyVector()
 	return s.chroma.UpsertDocuments(coll.ID, []string{scopeName}, []string{scopeName}, []map[string]interface{}{meta}, [][]float32{dummy})
 }
 

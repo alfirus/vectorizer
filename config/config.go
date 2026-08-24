@@ -19,8 +19,8 @@ type Config struct {
 	LmStudioURL     string `env:"LM_STUDIO_URL"`
 	OAICompatibleURL string `env:"OAI_COMPATIBLE_URL"`
 	OAIAPIKey       string `env:"OAI_API_KEY"`
-	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "Qwen/Qwen3-Embedding-4B" (1536d) or "nomic-embed-text" (768d)
-	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), 1536d
+	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "Qwen/Qwen3-Embedding-4B-GGUF" (1536d MRL)
+	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL)
 	
 	// LLM Brain config (optional)
 	LLMEnabled        bool   `env:"LLM_ENABLED"`
@@ -109,7 +109,7 @@ func Load() *Config {
 		LmStudioURL:     getEnvStringWithTOML("LM_STUDIO_URL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.URL }), "http://localhost:1234/v1"),
 		OAICompatibleURL: getEnvString("OAI_COMPATIBLE_URL", ""),
 		OAIAPIKey:       os.Getenv("OAI_API_KEY"),
-		EmbedModel:      getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "Qwen/Qwen3-Embedding-4B"),
+		EmbedModel:      getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "Qwen/Qwen3-Embedding-4B-GGUF"),
 		EmbedDimensions: getEnvIntWithTOML("EMBED_DIMENSIONS", tcAppInt(tc, func(c *tomlConfig) int { return c.Embedding.Dimensions }), 1536),
 
 		LLMEnabled:        envBoolWithTOML("LLM_ENABLED", tcBool(tc, func(c *tomlConfig) *bool { return c.LLM.Enabled }), false),

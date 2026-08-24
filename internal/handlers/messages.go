@@ -104,9 +104,14 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 		})
 	}
 
+	// Strict JWT batch check: if JWT has p, verify at least one msg uses that peer? For batch we check workspace match via middleware; peer check done per msg if peer_id present (currently not in batch schema, skip)
 	var results []fiber.Map
 	for _, msg := range req.Messages {
 		if msg.SessionID == "" || msg.Role == "" || msg.Content == "" {
+			continue
+		}
+		if len(msg.Content) > 100000 {
+			results = append(results, fiber.Map{"session_id": msg.SessionID, "stored": false, "error": "content too large"})
 			continue
 		}
 		wsID := msg.WorkspaceID
@@ -122,9 +127,13 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 			})
 			continue
 		}
+		if !models.ValidateResourceName(wsID) || !models.ValidateResourceName(msg.SessionID) {
+			results = append(results, fiber.Map{"session_id": msg.SessionID, "stored": false, "error": "invalid id format"})
+			continue
+		}
 		sessionID := msg.SessionID
 
-		m := models.NewMessage(wsID, sessionID, msg.Role, msg.Content)
+		m := models.NewMessage(wsID, sessionID, msg.Role, models.SanitizeString(msg.Content))
 		if err := h.store.AddMessage(m, msg.Content); err != nil {
 			results = append(results, fiber.Map{
 				"session_id": sessionID,
@@ -134,6 +143,7 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 			})
 			continue
 		}
+		if h.deriver != nil { h.deriver.Enqueue(m.WorkspaceID, m.SessionID, "", m.ID, m.Content) }
 
 		results = append(results, fiber.Map{
 			"id":          m.ID,

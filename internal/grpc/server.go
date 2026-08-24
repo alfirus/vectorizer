@@ -69,5 +69,5 @@ func (s *Server) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.ChatRespons
 }
 
 func (s *Server) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {
-	return &pb.HealthResponse{Status: "ok", Version: "0.2.0"}, nil
+	return &pb.HealthResponse{Status: "ok", Version: "0.3.0"}, nil
 }

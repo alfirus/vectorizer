@@ -198,7 +198,7 @@ func main() {
 			status = "degraded"
 		}
 		return c.JSON(fiber.Map{
-			"status": status, "name": "vectorizer", "version": "0.2.0",
+			"status": status, "name": "vectorizer", "version": "0.3.0",
 			"llm_enabled": cfg.LLMEnabled, "chromadb": chromaStatus, "embedding_model": cfg.EmbedModel,
 		})
 	})
@@ -358,7 +358,7 @@ func main() {
 		}
 	}()
 
-	// Dreamer (offline, same 768d) — every 3 hours
+	// Dreamer (offline, 1536d) — every 3 hours
 	if brain != nil {
 		d := dreamer.New(store, brain, 3*time.Hour)
 		d.Start()
