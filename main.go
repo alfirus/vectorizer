@@ -345,9 +345,9 @@ func main() {
 		}
 	}()
 
-	// Dreamer (offline, same 768d)
+	// Dreamer (offline, same 768d) — every 3 hours
 	if brain != nil {
-		d := dreamer.New(store, brain, 10*time.Minute)
+		d := dreamer.New(store, brain, 3*time.Hour)
 		d.Start()
 		defer d.Stop()
 	}

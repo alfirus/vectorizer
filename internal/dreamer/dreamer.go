@@ -17,7 +17,7 @@ type Dreamer struct {
 }
 
 func New(s *store.Store, brain *llmbrain.Service, interval time.Duration) *Dreamer {
-	if interval<=0 { interval=10*time.Minute }
+	if interval<=0 { interval=3*time.Hour }
 	return &Dreamer{store: s, brain: brain, interval: interval, stop: make(chan struct{})}
 }
 
