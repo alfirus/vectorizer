@@ -168,6 +168,11 @@ func main() {
 	api.Post("/workspaces", workspacesHandler.CreateWorkspace)
 	api.Get("/workspaces/:id", workspacesHandler.GetWorkspace)
 
+	// Sessions (peers + scopes)
+	sessionsHandler := handlers.NewSessionsHandler(store)
+	api.Post("/sessions", sessionsHandler.CreateSession)
+	api.Get("/sessions", sessionsHandler.ListSessions)
+
 	// Messages — storage and search
 	api.Post("/messages", messagesHandler.AddMessage)
 	api.Post("/messages/batch", messagesHandler.AddBatchMessages)

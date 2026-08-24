@@ -1,10 +1,30 @@
 package models
 
 import (
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var resourceNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func ValidateResourceName(s string) bool {
+	return len(s) >= 1 && len(s) <= 512 && resourceNameRe.MatchString(s)
+}
+func SanitizeString(s string) string { return strings.ReplaceAll(s, "\x00", "") }
+func ValidateMetadata(m map[string]interface{}) error {
+	if len(m) > 100 { return &validationError{"metadata exceeds 100 keys"} }
+	return checkDepth(m, 1)
+}
+func checkDepth(m map[string]interface{}, d int) error {
+	if d > 5 { return &validationError{"metadata depth >5"} }
+	for _, v := range m { if mm, ok := v.(map[string]interface{}); ok { if err := checkDepth(mm, d+1); err != nil { return err } } }
+	return nil
+}
+type validationError struct{ msg string }
+func (e *validationError) Error() string { return e.msg }
 
 // Workspace represents a top-level namespace for agent memory isolation.
 type Workspace struct {
@@ -40,12 +60,13 @@ func NewSession(workspaceID, title string) *Session {
 
 // Message represents a single message within a session.
 type Message struct {
-	ID          string    `json:"id"`
-	WorkspaceID string    `json:"workspace_id"`
-	SessionID   string    `json:"session_id"`
-	Role        string    `json:"role"` // "user", "assistant", "system"
-	Content     string    `json:"content"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string                 `json:"id"`
+	WorkspaceID string                 `json:"workspace_id"`
+	SessionID   string                 `json:"session_id"`
+	Role        string                 `json:"role"`
+	Content     string                 `json:"content"`
+	CreatedAt   time.Time              `json:"created_at"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func NewMessage(workspaceID, sessionID, role, content string) *Message {

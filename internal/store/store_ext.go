@@ -49,6 +49,24 @@ func parseDate(s string) (time.Time, bool) {
 	return t, true
 }
 
+func (s *Store) SaveSessionMeta(workspaceID, sessionID string, peerIDs []string, scope string) error {
+	collName := s.GetCollectionName(workspaceID)
+	coll, err := s.chroma.EnsureCollection(collName, map[string]interface{}{"workspace_id": workspaceID})
+	if err != nil { return err }
+	meta := map[string]interface{}{"workspace_id": workspaceID, "session_id": sessionID, "type": "session_meta", "created_at": time.Now().UTC().Format(time.RFC3339)}
+	if len(peerIDs)>0 { meta["peer_ids"]=strings.Join(peerIDs, ",") }
+	if scope!="" { meta["scope"]=scope }
+	// Upsert zero-vector marker (chroma requires embeddings; use dummy 768d)
+	dummy := make([]float32, 768)
+	return s.chroma.UpsertDocuments(coll.ID, []string{"session_meta_"+sessionID}, []string{""}, []map[string]interface{}{meta}, [][]float32{dummy})
+}
+func (s *Store) ListSessions(workspaceID string) ([]map[string]interface{}, error) {
+	collName := s.GetCollectionName(workspaceID)
+	coll, err := s.chroma.GetCollection(collName)
+	if err != nil { return []map[string]interface{}{}, nil }
+	return s.chroma.GetDocuments(coll.ID, map[string]interface{}{"type": "session_meta"}, 100, 0)
+}
+
 // SearchWithOptions adds pagination + date range.
 func (s *Store) SearchWithOptions(query, workspaceID, sessionID, role string, nResults, offset int, after, before string) ([]map[string]interface{}, int, error) {
 	results, err := s.Search(query, workspaceID, sessionID, role, nResults+offset)

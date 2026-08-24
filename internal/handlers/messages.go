@@ -26,20 +26,19 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	var req struct {
 		WorkspaceID string `json:"workspace_id"`
 		SessionID   string `json:"session_id"`
-		Role        string `json:"role"` // "user", "assistant", "system"
+		Role        string `json:"role"`
 		Content     string `json:"content"`
+		Scope       string `json:"scope,omitempty"`
+		PeerID      string `json:"peer_id,omitempty"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
-	}
-
+	if err := c.BodyParser(&req); err != nil { return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"}) }
 	if req.WorkspaceID == "" || req.SessionID == "" || req.Role == "" || req.Content == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "workspace_id, session_id, role, and content are required",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id, session_id, role, and content are required"})
 	}
+	for _, n := range []string{req.WorkspaceID, req.SessionID} {
+		if !models.ValidateResourceName(n) { return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id format"}) }
+	}
+	req.Content = models.SanitizeString(req.Content)
 
 	if req.Role != "user" && req.Role != "assistant" && req.Role != "system" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -164,18 +163,13 @@ func (h *MessagesHandler) SearchMessages(c *fiber.Ctx) error {
 			role = v
 		}
 	}
-	results, err := h.store.Search(req.Query, wID, sID, role, nResults)
-	if err != nil {
-		fmt.Printf("Error searching: %v\n", err)
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to search messages",
-		})
-	}
-
-	return c.JSON(fiber.Map{
-		"results": results,
-		"count":   len(results),
-	})
+	hybrid := false
+	if v, ok := req.Where["hybrid"].(bool); ok { hybrid = v }
+	var results []models.SearchResult
+	var err2 error
+	if hybrid { results, err2 = h.store.HybridSearch(req.Query, wID, sID, role, nResults) } else { results, err2 = h.store.Search(req.Query, wID, sID, role, nResults) }
+	if err2 != nil { fmt.Printf("Error searching: %v\n", err2); return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"}) }
+	return c.JSON(fiber.Map{"results": results, "count": len(results)})
 }
 
 // SearchMessagesSimple is a simpler search endpoint with query params.
@@ -196,18 +190,11 @@ func (h *MessagesHandler) SearchMessagesSimple(c *fiber.Ctx) error {
 		nResults = 10
 	}
 
-	results, err := h.store.Search(query, workspaceID, sessionID, role, nResults)
-	if err != nil {
-		fmt.Printf("Error searching: %v\n", err)
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to search messages",
-		})
-	}
-
-	return c.JSON(fiber.Map{
-		"results": results,
-		"count":   len(results),
-	})
+	var results2 []models.SearchResult
+	var err3 error
+	if c.Query("hybrid")=="true" { results2, err3 = h.store.HybridSearch(query, workspaceID, sessionID, role, nResults) } else { results2, err3 = h.store.Search(query, workspaceID, sessionID, role, nResults) }
+	if err3 != nil { fmt.Printf("Error searching: %v\n", err3); return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"}) }
+	return c.JSON(fiber.Map{"results": results2, "count": len(results2)})
 }
 
 func (h *MessagesHandler) ListMessages(c *fiber.Ctx) error {

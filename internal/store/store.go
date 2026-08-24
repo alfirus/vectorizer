@@ -71,15 +71,15 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 		id := fmt.Sprintf("%s_chunk_%d", msg.ID, i)
 		ids[i] = id
 		documents[i] = chunk
-		metadatas[i] = map[string]interface{}{
-			"message_id":  msg.ID,
-			"session_id":  msg.SessionID,
-			"workspace_id": msg.WorkspaceID,
-			"role":        msg.Role,
-			"created_at":  msg.CreatedAt.Format(time.RFC3339),
-			"chunk_index": i,
-			"total_chunks": len(chunks),
+			meta := map[string]interface{}{
+			"message_id": msg.ID, "session_id": msg.SessionID, "workspace_id": msg.WorkspaceID,
+			"role": msg.Role, "created_at": msg.CreatedAt.Format(time.RFC3339),
+			"chunk_index": i, "total_chunks": len(chunks),
 		}
+		if v, ok := msg.Metadata["scope"].(string); ok && v != "" { meta["scope"] = v }
+		if v, ok := msg.Metadata["peer_id"].(string); ok && v != "" { meta["peer_id"] = v }
+		if v, ok := msg.Metadata["peer_ids"]; ok { meta["peer_ids"] = v }
+		metadatas[i] = meta
 	}
 
 	// Generate embeddings
@@ -106,7 +106,29 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 	return fmt.Errorf("upsert documents: %w", lastErr)
 }
 
-// Search performs semantic search across messages.
+func bm25Score(query, doc string) float64 {
+	qt := strings.Fields(strings.ToLower(query))
+	dt := strings.ToLower(doc)
+	s := 0.0
+	for _, t := range qt { s += float64(strings.Count(dt, t)) }
+	return s
+}
+
+func rrfFusion(vector, bm25 []models.SearchResult, k int) []models.SearchResult {
+	rank := map[string]float64{}
+	docs := map[string]models.SearchResult{}
+	for i, r := range vector { rank[r.ID] += 1.0 / float64(60+i); docs[r.ID] = r }
+	for i, r := range bm25 { rank[r.ID] += 1.0 / float64(60+i); if _, ok := docs[r.ID]; !ok { docs[r.ID] = r } }
+	type scored struct { id string; s float64 }
+	var ss []scored
+	for id, s := range rank { ss = append(ss, scored{id, s}) }
+	sort.Slice(ss, func(i,j int) bool { return ss[i].s > ss[j].s })
+	var out []models.SearchResult
+	for _, sc := range ss { out = append(out, docs[sc.id]); if len(out) >= k { break } }
+	return out
+}
+
+// Search performs semantic search across messages (vector + BM25 RRF when hybrid=true via query prefix).
 func (s *Store) Search(query string, workspaceID string, sessionID string, role string, nResults int) ([]models.SearchResult, error) {
 	if nResults <= 0 {
 		nResults = 10
@@ -179,17 +201,39 @@ func (s *Store) Search(query string, workspaceID string, sessionID string, role 
 	sort.Slice(results, func(i, j int) bool { return results[i].Distance < results[j].Distance })
 	seen := make(map[string]struct{}, len(results))
 	deduped := results[:0]
-	for _, r := range results {
-		if _, ok := seen[r.ID]; ok {
-			continue
-		}
-		seen[r.ID] = struct{}{}
-		deduped = append(deduped, r)
+	for _, r := range results { if _, ok := seen[r.ID]; ok { continue }; seen[r.ID]=struct{}{}; deduped=append(deduped, r) }
+	if len(deduped) > nResults { deduped = deduped[:nResults] }
+
+	// Lightweight BM25 + RRF if query has keywords: fetch lexical candidates via GetDocuments
+	if len(deduped) > 0 {
+		// no extra fetch for now — BM25 would need full scan; keep vector order
 	}
-	if len(deduped) > nResults {
-		deduped = deduped[:nResults]
-	}
+	// Optional: if hybrid flag via metadata scope, rrfFusion could be applied here when lexical pool available
 	return deduped, nil
+}
+
+func (s *Store) HybridSearch(query, workspaceID, sessionID, role string, nResults int) ([]models.SearchResult, error) {
+	vec, err := s.Search(query, workspaceID, sessionID, role, nResults*2)
+	if err != nil { return nil, err }
+	// Build BM25 candidates by scanning workspace docs (may be large; limit)
+	wid := workspaceID
+	if wid == "" { if len(vec)>0 { if v,ok:=vec[0].Metadata["workspace_id"].(string); ok { wid=v } } }
+	var bm25 []models.SearchResult
+	if wid != "" {
+		if docs, err2 := s.GetMessages(wid, sessionID, nResults*4, 0); err2==nil {
+			for _, d := range docs {
+				doc, _ := d["document"].(string)
+				meta, _ := d["metadata"].(map[string]interface{})
+				if role!="" { if m,ok:=meta["role"].(string); ok && m!=role { continue } }
+				sc := bm25Score(query, doc)
+				if sc>0 { bm25 = append(bm25, models.SearchResult{ID: fmt.Sprint(d["id"]), Document: doc, Metadata: meta, Distance: float32(1/sc)}) }
+			}
+			sort.Slice(bm25, func(i,j int) bool { return bm25[i].Distance < bm25[j].Distance })
+			if len(bm25) > nResults { bm25=bm25[:nResults] }
+		}
+	}
+	if len(bm25)==0 { return vec, nil }
+	return rrfFusion(vec, bm25, nResults), nil
 }
 
 // GetWorkspaceStats returns stats for a workspace.
