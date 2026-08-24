@@ -1,4 +1,4 @@
-# Vectorizer MCP Server (768d)
+# Vectorizer MCP Server (1536d (Qwen3-Embedding-4B MRL))
 
 Stdio MCP proxy for Vectorizer REST (`/api/v1/*`, `X-API-Key`).
 

@@ -57,14 +57,17 @@ func main() {
 		log.Printf("Warning: ChromaDB may not be running at %s:%d", cfg.ChromaHost, cfg.ChromaPort)
 	}
 
-	// Initialize embedding service
+	// Initialize embedding service (Qwen3 1536d MRL via openai-compatible, Honcho VECTOR_DIMENSIONS parity)
 	var embedService *embedding.Service
 	if cfg.EmbedProvider == "openai-compatible" && cfg.OAICompatibleURL != "" {
-		embedService = embedding.New(cfg.OAICompatibleURL, cfg.OAIAPIKey, cfg.EmbedModel)
+		embedService = embedding.NewWithDimensions(cfg.OAICompatibleURL, cfg.OAIAPIKey, cfg.EmbedModel, cfg.EmbedDimensions)
+	} else if cfg.EmbedProvider == "openai-compatible" {
+		// Fallback to LMStudio URL if OAI URL not set but provider is openai-compatible (e.g. local vLLM)
+		embedService = embedding.NewWithDimensions(cfg.LmStudioURL, "", cfg.EmbedModel, cfg.EmbedDimensions)
 	} else {
-		// Default: LM Studio (no API key needed usually)
-		embedService = embedding.New(cfg.LmStudioURL, "", cfg.EmbedModel)
+		embedService = embedding.NewWithDimensions(cfg.LmStudioURL, "", cfg.EmbedModel, cfg.EmbedDimensions)
 	}
+	fmt.Printf("  Embedding dimensions: %d\n", cfg.EmbedDimensions)
 
 	// Initialize store
 	store := store.New(chromaClient, embedService)

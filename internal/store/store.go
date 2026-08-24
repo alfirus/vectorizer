@@ -28,6 +28,14 @@ func New(chromaClient *chromadb.Client, embedService *embedding.Service) *Store 
 	}
 }
 
+func (s *Store) dummyVector() []float32 {
+	dim := 1536
+	if s.embed != nil && s.embed.Dimensions() > 0 {
+		dim = s.embed.Dimensions()
+	}
+	return make([]float32, dim)
+}
+
 // EnsureWorkspace creates a ChromaDB collection for the workspace if it doesn't exist.
 func (s *Store) EnsureWorkspace(workspaceID string) error {
 	collName := fmt.Sprintf("ws_%s", workspaceID)

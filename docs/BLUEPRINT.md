@@ -1,7 +1,7 @@
 # Vectorizer — Architecture Blueprint
 
 **Version:** 0.2.0  
-**Status:** Honcho-competitive (self-hosted, Go/Chroma 768d)  
+**Status:** Honcho-competitive (self-hosted, Go/Chroma 1536d Qwen3)  
 **Last updated:** 2026-08-25
 
 ---
@@ -24,11 +24,11 @@
 
 Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
-- **Message storage** with automatic chunking and embedding generation (4000 chars, `nomic-embed-text` 768d)
+- **Message storage** with automatic chunking and embedding generation (4000 chars, `Qwen/Qwen3-Embedding-4B` 1536d via MRL, `nomic-embed-text` 768d fallback)
 - **Semantic + hybrid search** (vector cosine HNSW + BM25 RRF) with scoping and temporal filters
 - **Peers + peer cards** (Honcho `Peer` parity, `ws_<id>_peers` / `ws_<id>_peer_cards`)
 - **Dialectic chat** (`POST /workspaces/:id/chat`, observer/observed, `reasoning_level` none/low/medium/high/max)
-- **Conclusions + representations + dreamer** (offline `summarize→embed 768d→ws_<id>_conclusions`)
+- **Conclusions + representations + dreamer** (offline `summarize→embed 1536d→ws_<id>_conclusions`, `qwen-embed` MRL)
 - **Optional LLM brain** for summarization and Q&A (SSE streaming, auto-fetch)
 - **Workspace isolation** — each agent gets its own namespace (`ws_<id>`)
 - **MCP + Skills + SDKs** (Honcho-style `mcp-remote`, `npx skills add`, `@vectorizer/sdk` / `vectorizer-ai`)
@@ -44,7 +44,7 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 - Not a database replacement — it's an append-only memory layer on top of ChromaDB
 - Not a session store — sessions are logical groupings, not persisted independently
-- Honcho-competitive core: peers, dialectic, conclusions/representations, dreamer, scopes — but single-binary Go/Chroma (no Postgres/pgvector), 768d pinned
+- Honcho-competitive core: peers, dialectic, conclusions/representations, dreamer, scopes — but single-binary Go/Chroma (no Postgres/pgvector), 1536d pinned (Qwen3 4B MRL)
 
 ---
 
@@ -76,11 +76,11 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 | **Config** | `config/` | Layered config: `env > .env > config.toml > defaults` (Honcho `TOML_CONFIG` parity, BurntSushi/toml) |
 | **Security** | `internal/security/` | JWT `w/p/ad` claims, HS256, `scripts/generate_jwt.go` (Honcho `src/security.py` parity) |
 | **ChromaDB Client** | `internal/chromadb/` | ChromaDB v2 REST API wrapper (collections, upsert, query, get, heartbeat) |
-| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion (768d `nomic-embed-text` default) |
+| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion (1536d `Qwen3-Embedding-4B` MRL, `dimensions` param, fallback `nomic-embed-text` 768d) |
 | **LLM Brain** | `internal/llmbrain/` | Chat/summarize via `/chat/completions` (`ChatWithTemp` for reasoning levels) |
 | **Models** | `internal/models/` | Workspace, Session, Message (with `Metadata`), Peer, PeerCard, SearchRequest |
 | **Store** | `internal/store/` | Chunking, embed, upsert (retry), search (vector+BM25 RRF), conclusions, peers, sessions, grep, TTL, scopes |
-| **Dreamer** | `internal/dreamer/` | Periodic `summarize→embed 768d→ws_<id>_conclusions` (Honcho `src/dreamer/`) |
+| **Dreamer** | `internal/dreamer/` | Periodic `summarize→embed 1536d→ws_<id>_conclusions` via `qwen-embed` (Honcho `src/dreamer/`) |
 | **Webhooks** | `internal/webhooks/` | In-mem endpoint registry + `Fire` (Honcho `src/webhooks`) |
 | **Handlers** | `internal/handlers/` | Workspaces, messages, sessions, peers, chat (dialectic), ingest, conclusions, webhooks, brain, metrics |
 | **MCP** | `mcp/` | Stdio MCP proxy (`@modelcontextprotocol/sdk`, 13 tools, Honcho `mcp/` parity) |
@@ -97,7 +97,7 @@ Layered config, Honcho `src/config.py` parity: `env > .env > config.toml > defau
 **Key design decisions:**
 - Embedding and LLM brain have **separate provider configs**
 - `LLM_ENABLED` gate; `AUTH_USE_AUTH` JWT gate (Honcho `AUTH_USE_AUTH`)
-- Pinned 768d (`nomic-embed-text`), same dim for `ws_<id>` / `ws_<id>_conclusions` / `ws_<id>_dream` / `ws_<id>_peers`
+- Pinned 1536d (`Qwen/Qwen3-Embedding-4B` MRL), same dim for `ws_<id>` / `ws_<id>_conclusions` / `ws_<id>_dream` / `ws_<id>_peers`
 
 **Config fields:**
 
@@ -195,11 +195,11 @@ Core business logic layer. Orchestrates embedding generation, chunking, and Chro
 |---------|--------|----------------|
 | `WorkspacesHandler` | GET/POST /workspaces, GET /workspaces/:id | Workspace CRUD (Chroma-backed `ws_<id>`, `EnsureCollection`) |
 | `MessagesHandler` | POST /messages, POST /messages/batch, GET/POST /messages/search, GET /workspaces/:id/stats, GET /messages | Messages (scope/peer_ids, NUL-strip, ValidateResourceName, hybrid `?hybrid=true`) |
-| `SessionsHandler` | POST/GET /sessions | Sessions `{peer_ids, scope}` (`SaveSessionMeta` 768d marker) |
-| `PeersHandler` | POST/GET /workspaces/:id/peers, PUT/GET /peers/:peer_id/card | Peers + peer cards (`ws_<id>_peers`, `ws_<id>_peer_cards` 768d) |
+| `SessionsHandler` | POST/GET /sessions | Sessions `{peer_ids, scope}` (`SaveSessionMeta` 1536d marker) |
+| `PeersHandler` | POST/GET /workspaces/:id/peers, PUT/GET /peers/:peer_id/card | Peers + peer cards (`ws_<id>_peers`, `ws_<id>_peer_cards` 1536d) |
 | `ChatHandler` | POST/GET /workspaces/:id/chat | Dialectic chat (observer/observed, `reasoning_level` none/low/medium/high/max) |
 | `IngestHandler` | POST /messages/upload, GET /messages/grep, GET /messages/temporal, DELETE /workspaces/:id/ttl | Upload, grep, temporal search, TTL cleanup |
-| `ConclusionsHandler` | POST/GET /conclusions, DELETE /conclusions/:id, GET /representations | Conclusions (`ws_<id>_conclusions` 768d) + representations |
+| `ConclusionsHandler` | POST/GET /conclusions, DELETE /conclusions/:id, GET /representations | Conclusions (`ws_<id>_conclusions` 1536d) + representations |
 | `WebhooksHandler` | POST/GET /webhooks | Endpoint registry |
 | `BrainHandler` | POST /brain/summarize (+ stream SSE), POST /brain/ask | LLM summarize/ask (auto-fetch, `ChatWithTemp`) |
 
@@ -697,7 +697,7 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 ## 9. Future Roadmap
 
 ### Phase 1: Core Stability — done
-- [x] Message storage with embedding generation (768d, chunking, retry)
+- [x] Message storage with embedding generation (1536d, chunking, retry)
 - [x] Semantic search with metadata filtering
 - [x] Optional LLM brain (summarize + ask, auto-fetch, SSE)
 - [x] Docker Compose deployment
@@ -727,7 +727,7 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] Message TTL (`DELETE /workspaces/:id/ttl`, `TTL_HOURS`)
 - [x] Cross-workspace search (deduped `Search` fan-out)
 - [x] Webhook notifications (`POST/GET /webhooks`, `Fire`)
-- [x] Conclusions/representations (`POST/GET /conclusions`, `GET /representations`, `ws_<id>_conclusions` 768d)
+- [x] Conclusions/representations (`POST/GET /conclusions`, `GET /representations`, `ws_<id>_conclusions` 1536d)
 - [x] Peers + peer cards (`POST/GET /peers`, `PUT/GET /peers/:peer_id/card`, `ws_<id>_peers`, `ws_<id>_peer_cards`)
 - [x] JWT auth (Honcho `w/p/ad`, `AUTH_USE_AUTH`, `AUTH_JWT_SECRET`, `scripts/generate_jwt.go`)
 - [x] Layered config (`config.toml`, `env > .env > config.toml > defaults`)

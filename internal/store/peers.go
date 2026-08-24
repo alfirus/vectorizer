@@ -16,8 +16,7 @@ func (s *Store) CreatePeer(workspaceID, peerName string, metadata map[string]int
 	id := peerName
 	meta := map[string]interface{}{"peer_name": peerName, "workspace_id": workspaceID, "created_at": time.Now().UTC().Format(time.RFC3339)}
 	for k,v:=range metadata { meta[k]=v }
-	// dummy 768d vector for peer marker
-	dummy := make([]float32, 768)
+	dummy := s.dummyVector()
 	return id, s.chroma.UpsertDocuments(coll.ID, []string{id}, []string{peerName}, []map[string]interface{}{meta}, [][]float32{dummy})
 }
 
@@ -32,7 +31,7 @@ func (s *Store) SetPeerCard(workspaceID, peerID string, lines []string) error {
 	if err != nil { return err }
 	meta := map[string]interface{}{"peer_id": peerID, "workspace_id": workspaceID, "updated_at": time.Now().UTC().Format(time.RFC3339)}
 	content := strings.Join(lines, "\n")
-	dummy := make([]float32, 768)
+	dummy := s.dummyVector()
 	// also embed card for retrieval
 	if emb, err2 := s.embed.Embed([]string{content}); err2 == nil && len(emb)>0 {
 		return s.chroma.UpsertDocuments(coll.ID, []string{peerID}, []string{content}, []map[string]interface{}{meta}, [][]float32{emb[0].Vector})

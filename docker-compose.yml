@@ -10,9 +10,15 @@ services:
     environment:
       CHROMA_HOST: chromadb
       CHROMA_PORT: 8000
+      EMBED_PROVIDER: ${EMBED_PROVIDER:-openai-compatible}
+      EMBED_MODEL: ${EMBED_MODEL:-Qwen/Qwen3-Embedding-4B}
+      EMBED_DIMENSIONS: ${EMBED_DIMENSIONS:-1536}
+      OAI_COMPATIBLE_URL: ${OAI_COMPATIBLE_URL:-http://qwen-embed:8000/v1}
     depends_on:
       chromadb:
         condition: service_healthy
+      qwen-embed:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-8091}/api/v1/health"]
@@ -20,6 +26,34 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Qwen3-Embedding-4B at 1536d via vLLM MRL (Honcho VECTOR_DIMENSIONS parity)
+  # Requires Docker with NVIDIA runtime for GPU. For CPU-only dev, keep using nomic-embed-text (768d) by setting EMBED_MODEL=nomic-embed-text.
+  qwen-embed:
+    image: vllm/vllm-openai:latest
+    container_name: vectorizer-qwen-embed
+    command: >-
+      --model Qwen/Qwen3-Embedding-4B
+      --hf-overrides '{"is_matryoshka":true,"matryoshka_dimensions":[1536,2560]}'
+      --pooler-config '{"dimensions":1536}'
+      --max-model-len 32768
+      --dtype auto
+      --enforce-eager
+    ports:
+      - "${QWEN_PORT:-8001}:8000"
+    volumes:
+      - qwen_cache:/root/.cache/huggingface
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    restart: unless-stopped
+    # no healthcheck auto - vLLM loads 4B (~9GB VRAM), may take 60-90s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   chromadb:
     image: chromadb/chroma:1.0.0
@@ -43,3 +77,4 @@ services:
 
 volumes:
   chroma_data:
+  qwen_cache:

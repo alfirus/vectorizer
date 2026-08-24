@@ -85,8 +85,8 @@ func (s *Store) SaveSessionMeta(workspaceID, sessionID string, peerIDs []string,
 	meta := map[string]interface{}{"workspace_id": workspaceID, "session_id": sessionID, "type": "session_meta", "created_at": time.Now().UTC().Format(time.RFC3339)}
 	if len(peerIDs)>0 { meta["peer_ids"]=strings.Join(peerIDs, ",") }
 	if scope!="" { meta["scope"]=scope }
-	// Upsert zero-vector marker (chroma requires embeddings; use dummy 768d)
-	dummy := make([]float32, 768)
+	// Upsert zero-vector marker (chroma requires embeddings; use dummy 1536d for Qwen3)
+	dummy := s.dummyVector()
 	return s.chroma.UpsertDocuments(coll.ID, []string{"session_meta_"+sessionID}, []string{""}, []map[string]interface{}{meta}, [][]float32{dummy})
 }
 func (s *Store) ListSessions(workspaceID string) ([]map[string]interface{}, error) {

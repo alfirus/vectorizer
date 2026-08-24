@@ -13,7 +13,7 @@ A lightweight, self-hosted memory server for AI agents. Stores messages as embed
 - **Semantic + hybrid search** — vector cosine (HNSW) + BM25 RRF, `?hybrid=true`, temporal `after`/`before`
 - **Peers + peer cards** — `POST /workspaces/:id/peers`, `PUT /peers/:peer_id/card` (Honcho peer parity)
 - **Dialectic chat** — `POST /workspaces/:id/chat` (observer/observed, `reasoning_level` none/low/medium/high/max)
-- **Conclusions + representations + dreamer** — offline `summarize→embed 768d→ws_<id>_conclusions` (10m cron)
+- **Conclusions + representations + dreamer** — offline `summarize→embed 1536d (Qwen3-Embedding-4B MRL)→ws_<id>_conclusions` (10m cron)
 - **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A
 - **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt.go`, Honcho parity)
 - **Layered config** — `env > .env > config.toml > defaults` (`config.toml.example`)
@@ -26,7 +26,7 @@ A lightweight, self-hosted memory server for AI agents. Stores messages as embed
 ```
 Agent → Vectorizer API → ChromaDB (vectors) + Embedding Service
   │                        │
-  ├─ POST /messages       ├─ nomic-embed-text (local)
+  ├─ POST /messages       ├─ Qwen/Qwen3-Embedding-4B (1536d MRL, nomic-embed-text 768d fallback) (local)
   ├─ GET  /search         └─ text-embedding-3-small (OpenAI)
   └─ POST /brain/ask      └─ qwen3:8b, gpt-4o-mini, etc.
 ```
@@ -69,7 +69,7 @@ All settings via `.env` file or environment variables. Key options:
 | `DEFAULT_API_KEY` | *(empty)* | API key for auth (set to disable) |
 | `EMBED_PROVIDER` | `lm-studio` | Embedding provider: `lm-studio` or `openai-compatible` |
 | `LM_STUDIO_URL` | `http://localhost:1234/v1` | LM Studio endpoint |
-| `EMBED_MODEL` | `nomic-embed-text` | Embedding model name |
+| `EMBED_MODEL` | `Qwen/Qwen3-Embedding-4B` | Embedding model name |
 | `LLM_ENABLED` | `false` | Enable LLM brain (summarize/ask) |
 | `LLM_PROVIDER` | `lm-studio` | LLM provider: `lm-studio` or `openai-compatible` |
 | `LLM_MODEL` | `qwen3:8b` | LLM model name |
@@ -229,7 +229,8 @@ Each workspace maps to a separate ChromaDB collection: `ws_<workspace_id>`. This
 
 | Model | Provider | Dimensions | Notes |
 |-------|----------|------------|-------|
-| `nomic-embed-text` | LM Studio | 768 | Best local option, fast |
+| `Qwen/Qwen3-Embedding-4B` | vLLM | 1536 | MRL (primary) |
+| `nomic-embed-text` | LM Studio | 768 | Fallback (CPU) | Best local option, fast |
 | `text-embedding-3-small` | OpenAI | 1536 | Good quality, cloud |
 | `text-embedding-3-large` | OpenAI | 3072 | Highest quality, slower |
 
@@ -257,7 +258,7 @@ AI Agent (Hermes/OpenClaw/OpenCode/Claude) receives prompt
    │ 1. Agent calls Vectorizer FIRST (recall)
    ├─► vectorizer_search / POST /messages/search {query, workspace_id} ─┐
    │   or vectorizer_chat / POST /workspaces/:id/chat {query, observer} │
-   │   Vectorizer: embed query (nomic-embed-text 768d) → HNSW cosine   │
+   │   Vectorizer: embed query (Qwen/Qwen3-Embedding-4B (1536d MRL)) → HNSW cosine   │
    │   + optional BM25 RRF (?hybrid=true) → dedup/sort → top-k +       │
    │   peer cards + conclusions/representations                          │
    │ ◄─ returns {results, distances} + representation (peer card)       │
@@ -273,12 +274,12 @@ AI Agent (Hermes/OpenClaw/OpenCode/Claude) receives prompt
    ├─► vectorizer_add_message / POST /messages {workspace_id, session_id, role:"user", content: prompt}
    ├─► vectorizer_add_message {role:"assistant", content: answer}
    │   Vectorizer: ValidateResourceName + SanitizeString (strip \x00)   │
-   │   → chunkText 4000 (word-boundary) → Embed 768d batch → Upsert   │
+   │   → chunkText 4000 (word-boundary) → Embed 1536d batch (Qwen3) → Upsert   │
    │   → ws_<workspace_id> collection, metadata {message_id, role, created_at, scope, peer_id}
    │   → 3× retry backoff; 100k char cap, 429 rate limit (10/s)         │
    │                                                                     │
    └─► 5. Async side-effects (no user wait)                             │
-       ├─ dreamer cron (10m, 768d): summarize recent session → ws_<id>_conclusions
+       ├─ dreamer cron (3h, 1536d (Qwen3-Embedding-4B MRL)): summarize recent session → ws_<id>_conclusions
        ├─ conclusions/representations build peer view
        ├─ TTL cleanup (TTL_HOURS or DELETE /ttl?before=)
        └─ webhooks Fire("message.created") if registered
@@ -290,7 +291,7 @@ AI Agent (Hermes/OpenClaw/OpenCode/Claude) receives prompt
 **Step-by-step:**
 
 1. **User sends prompt** → AI agent intercepts.
-2. **Recall:** Agent calls `vectorizer_search` or `vectorizer_chat` (or `POST /messages/search` + `GET /representations`) with `workspace_id` (agent identity), `session_id` (thread), optional `scope`/`hybrid`/`temporal`. Vectorizer embeds query 768d, HNSW cosine search (plus BM25 RRF if requested), merges peer cards/conclusions.
+2. **Recall:** Agent calls `vectorizer_search` or `vectorizer_chat` (or `POST /messages/search` + `GET /representations`) with `workspace_id` (agent identity), `session_id` (thread), optional `scope`/`hybrid`/`temporal`. Vectorizer embeds query 1536d (Qwen3-Embedding-4B MRL), HNSW cosine search (plus BM25 RRF if requested), merges peer cards/conclusions.
 3. **Inject:** Agent prepends returned memories as context to its LLM.
 4. **Generate:** LLM produces final answer grounded in memories (with observer/observed perspective if dialectic).
 5. **Record:** Agent stores both user prompt and its answer via `vectorizer_add_message` / `POST /messages`; Vectorizer chunks, embeds, upserts.

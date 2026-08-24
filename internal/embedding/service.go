@@ -8,12 +8,13 @@ import (
 	"net/http"
 )
 
-// Service handles text-to-embedding conversion via external providers.
+// Service handles text-to-embedding conversion via external providers (Qwen3 1536d MRL).
 type Service struct {
-	baseURL string
-	apiKey  string
-	model   string
-	client  *http.Client
+	baseURL    string
+	apiKey     string
+	model      string
+	dimensions int
+	client     *http.Client
 }
 
 func New(baseURL, apiKey, model string) *Service {
@@ -21,12 +22,20 @@ func New(baseURL, apiKey, model string) *Service {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		model:   model,
+		dimensions: 1536,
 		client:  &http.Client{},
 	}
 }
 
+func NewWithDimensions(baseURL, apiKey, model string, dimensions int) *Service {
+	if dimensions <= 0 { dimensions = 1536 }
+	return &Service{baseURL: baseURL, apiKey: apiKey, model: model, dimensions: dimensions, client: &http.Client{}}
+}
+
 func (s *Service) Model() string { return s.model }
+func (s *Service) Dimensions() int { return s.dimensions }
 func (s *Service) SetModel(model string) { s.model = model }
+func (s *Service) SetDimensions(d int) { if d > 0 { s.dimensions = d } }
 func (s *Service) SetBaseURL(url string) { s.baseURL = url }
 
 // EmbeddingResult is a single embedding vector.
@@ -43,6 +52,7 @@ func (s *Service) Embed(texts []string) ([]EmbeddingResult, error) {
 	body := map[string]interface{}{
 		"model": s.model,
 		"input": texts,
+		"dimensions": s.dimensions,
 	}
 
 	resp, err := s.doJSON(http.MethodPost, "/embeddings", body)

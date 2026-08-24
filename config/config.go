@@ -14,12 +14,13 @@ type Config struct {
 	ChromaPort  int    `env:"CHROMA_PORT"`
 	DefaultAPIKey string `env:"DEFAULT_API_KEY"`
 	
-	// Embedding config
+	// Embedding config (Honcho parity: 1536d via Qwen3-Embedding-4B MRL)
 	EmbedProvider   string `env:"EMBED_PROVIDER"` // "lm-studio" or "openai-compatible"
 	LmStudioURL     string `env:"LM_STUDIO_URL"`
 	OAICompatibleURL string `env:"OAI_COMPATIBLE_URL"`
 	OAIAPIKey       string `env:"OAI_API_KEY"`
-	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "nomic-embed-text" or "text-embedding-3-small"
+	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "Qwen/Qwen3-Embedding-4B" (1536d) or "nomic-embed-text" (768d)
+	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), Honcho VECTOR_DIMENSIONS parity
 	
 	// LLM Brain config (optional)
 	LLMEnabled        bool   `env:"LLM_ENABLED"`
@@ -56,9 +57,10 @@ type tomlConfig struct {
 		APIKey    string `toml:"api_key"`
 	} `toml:"auth"`
 	Embedding struct {
-		Provider string `toml:"provider"`
-		Model    string `toml:"model"`
-		URL      string `toml:"url"`
+		Provider   string `toml:"provider"`
+		Model      string `toml:"model"`
+		URL        string `toml:"url"`
+		Dimensions int    `toml:"dimensions"`
 	} `toml:"embedding"`
 	LLM struct {
 		Enabled  *bool  `toml:"enabled"`
@@ -103,11 +105,12 @@ func Load() *Config {
 		ChromaPort:      getEnvIntWithTOML("CHROMA_PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.DB.Port }), 8100),
 		DefaultAPIKey:   getEnvStringWithTOML("DEFAULT_API_KEY", tcStr(tc, func(c *tomlConfig) string { return c.Auth.APIKey }), ""),
 
-		EmbedProvider:   getEnvStringWithTOML("EMBED_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Provider }), "lm-studio"),
+		EmbedProvider:   getEnvStringWithTOML("EMBED_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Provider }), "openai-compatible"),
 		LmStudioURL:     getEnvStringWithTOML("LM_STUDIO_URL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.URL }), "http://localhost:1234/v1"),
 		OAICompatibleURL: getEnvString("OAI_COMPATIBLE_URL", ""),
 		OAIAPIKey:       os.Getenv("OAI_API_KEY"),
-		EmbedModel:      getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "nomic-embed-text"),
+		EmbedModel:      getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "Qwen/Qwen3-Embedding-4B"),
+		EmbedDimensions: getEnvIntWithTOML("EMBED_DIMENSIONS", tcAppInt(tc, func(c *tomlConfig) int { return c.Embedding.Dimensions }), 1536),
 
 		LLMEnabled:        envBoolWithTOML("LLM_ENABLED", tcBool(tc, func(c *tomlConfig) *bool { return c.LLM.Enabled }), false),
 		LLMProvider:       getEnvStringWithTOML("LLM_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Provider }), "lm-studio"),
