@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"strconv"
+
+	"github.com/BurntSushi/toml"
 )
 
 type Config struct {
@@ -39,30 +41,73 @@ type Config struct {
 	ChromaDatabase   string `env:"CHROMA_DATABASE"`
 }
 
+type tomlConfig struct {
+	App struct {
+		Port int `toml:"port"`
+	} `toml:"app"`
+	DB struct {
+		Host string `toml:"host"`
+		Port int `toml:"port"`
+	} `toml:"db"`
+	Auth struct {
+		UseAuth   *bool  `toml:"use_auth"`
+		JWTSecret string `toml:"jwt_secret"`
+		APIKey    string `toml:"api_key"`
+	} `toml:"auth"`
+	Embedding struct {
+		Provider string `toml:"provider"`
+		Model    string `toml:"model"`
+		URL      string `toml:"url"`
+	} `toml:"embedding"`
+	LLM struct {
+		Enabled  *bool  `toml:"enabled"`
+		Provider string `toml:"provider"`
+		Model    string `toml:"model"`
+	} `toml:"llm"`
+}
+
+func loadTOML(path string) *tomlConfig {
+	if os.Getenv("VECTORIZER_CONFIG_TOML_DISABLED") != "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	var cfg tomlConfig
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return nil
+	}
+	return &cfg
+}
+
 func Load() *Config {
+	tc := loadTOML("config.toml")
+	if tc == nil {
+		tc = loadTOML("config/config.toml")
+	}
 	return &Config{
-		Port:            getEnvInt("PORT", 8091),
-		ChromaHost:      getEnvString("CHROMA_HOST", "localhost"),
-		ChromaPort:      getEnvInt("CHROMA_PORT", 8100),
-		DefaultAPIKey:   os.Getenv("DEFAULT_API_KEY"),
-		
-		EmbedProvider:   getEnvString("EMBED_PROVIDER", "lm-studio"),
-		LmStudioURL:     getEnvString("LM_STUDIO_URL", "http://localhost:1234/v1"),
+		Port:            getEnvIntWithTOML("PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.App.Port }), 8091),
+		ChromaHost:      getEnvStringWithTOML("CHROMA_HOST", tcStr(tc, func(c *tomlConfig) string { return c.DB.Host }), "localhost"),
+		ChromaPort:      getEnvIntWithTOML("CHROMA_PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.DB.Port }), 8100),
+		DefaultAPIKey:   getEnvStringWithTOML("DEFAULT_API_KEY", tcStr(tc, func(c *tomlConfig) string { return c.Auth.APIKey }), ""),
+
+		EmbedProvider:   getEnvStringWithTOML("EMBED_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Provider }), "lm-studio"),
+		LmStudioURL:     getEnvStringWithTOML("LM_STUDIO_URL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.URL }), "http://localhost:1234/v1"),
 		OAICompatibleURL: getEnvString("OAI_COMPATIBLE_URL", ""),
 		OAIAPIKey:       os.Getenv("OAI_API_KEY"),
-		EmbedModel:      getEnvString("EMBED_MODEL", "nomic-embed-text"),
-		
-		LLMEnabled:        envBool("LLM_ENABLED", false),
-		LLMProvider:       getEnvString("LLM_PROVIDER", "lm-studio"),
+		EmbedModel:      getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "nomic-embed-text"),
+
+		LLMEnabled:        envBoolWithTOML("LLM_ENABLED", tcBool(tc, func(c *tomlConfig) *bool { return c.LLM.Enabled }), false),
+		LLMProvider:       getEnvStringWithTOML("LLM_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Provider }), "lm-studio"),
 		LLMLmStudioURL:    getEnvString("LLM_STUDIO_URL", os.Getenv("LM_STUDIO_URL")),
 		LLMOAICompatibleURL: getEnvString("LLM_OAI_COMPATIBLE_URL", ""),
 		LLMOAIAPIKey:      os.Getenv("LLM_OAI_API_KEY"),
-		LLMModel:          getEnvString("LLM_MODEL", "qwen3:8b"),
-		
+		LLMModel:          getEnvStringWithTOML("LLM_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Model }), "qwen3:8b"),
+
 		TTLHours:       getEnvInt("TTL_HOURS", 0),
 
-		AuthUseAuth:    envBool("AUTH_USE_AUTH", false),
-		AuthJWTSecret:  os.Getenv("AUTH_JWT_SECRET"),
+		AuthUseAuth:    envBoolWithTOML("AUTH_USE_AUTH", tcBool(tc, func(c *tomlConfig) *bool { return c.Auth.UseAuth }), false),
+		AuthJWTSecret:  getEnvStringWithTOML("AUTH_JWT_SECRET", tcStr(tc, func(c *tomlConfig) string { return c.Auth.JWTSecret }), ""),
 
 		ChromaTenant:     getEnvString("CHROMA_TENANT", "default_tenant"),
 		ChromaDatabase:   getEnvString("CHROMA_DATABASE", "default_database"),
@@ -118,4 +163,54 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func tcStr(tc *tomlConfig, fn func(*tomlConfig) string) string {
+	if tc == nil {
+		return ""
+	}
+	return fn(tc)
+}
+func tcAppInt(tc *tomlConfig, fn func(*tomlConfig) int) int {
+	if tc == nil {
+		return 0
+	}
+	return fn(tc)
+}
+func tcBool(tc *tomlConfig, fn func(*tomlConfig) *bool) *bool {
+	if tc == nil {
+		return nil
+	}
+	return fn(tc)
+}
+func getEnvStringWithTOML(envKey, tomlVal, fallback string) string {
+	if v := os.Getenv(envKey); v != "" {
+		return v
+	}
+	if tomlVal != "" {
+		return tomlVal
+	}
+	return fallback
+}
+func getEnvIntWithTOML(envKey string, tomlVal, fallback int) int {
+	if v := os.Getenv(envKey); v != "" {
+		if iv, err := strconv.Atoi(v); err == nil {
+			return iv
+		}
+	}
+	if tomlVal != 0 {
+		return tomlVal
+	}
+	return fallback
+}
+func envBoolWithTOML(envKey string, tomlVal *bool, fallback bool) bool {
+	if v := os.Getenv(envKey); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	if tomlVal != nil {
+		return *tomlVal
+	}
+	return fallback
 }

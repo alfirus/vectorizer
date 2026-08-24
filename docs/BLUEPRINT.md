@@ -1,8 +1,8 @@
 # Vectorizer — Architecture Blueprint
 
-**Version:** 0.1.0  
-**Status:** Initial implementation  
-**Last updated:** 2026-08-24
+**Version:** 0.2.0  
+**Status:** Honcho-competitive (self-hosted, Go/Chroma 768d)  
+**Last updated:** 2026-08-25
 
 ---
 
@@ -24,10 +24,14 @@
 
 Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
-- **Message storage** with automatic chunking and embedding generation
-- **Semantic search** across stored messages using vector similarity
-- **Optional LLM brain** for summarization and question answering
-- **Workspace isolation** — each agent gets its own namespace (ChromaDB collection)
+- **Message storage** with automatic chunking and embedding generation (4000 chars, `nomic-embed-text` 768d)
+- **Semantic + hybrid search** (vector cosine HNSW + BM25 RRF) with scoping and temporal filters
+- **Peers + peer cards** (Honcho `Peer` parity, `ws_<id>_peers` / `ws_<id>_peer_cards`)
+- **Dialectic chat** (`POST /workspaces/:id/chat`, observer/observed, `reasoning_level` none/low/medium/high/max)
+- **Conclusions + representations + dreamer** (offline `summarize→embed 768d→ws_<id>_conclusions`)
+- **Optional LLM brain** for summarization and Q&A (SSE streaming, auto-fetch)
+- **Workspace isolation** — each agent gets its own namespace (`ws_<id>`)
+- **MCP + Skills + SDKs** (Honcho-style `mcp-remote`, `npx skills add`, `@vectorizer/sdk` / `vectorizer-ai`)
 
 ### Design Goals
 
@@ -40,7 +44,7 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 - Not a database replacement — it's an append-only memory layer on top of ChromaDB
 - Not a session store — sessions are logical groupings, not persisted independently
-- Not a full Honcho clone — no derivation pipeline, no dialectic endpoint, no user profiles
+- Honcho-competitive core: peers, dialectic, conclusions/representations, dreamer, scopes — but single-binary Go/Chroma (no Postgres/pgvector), 768d pinned
 
 ---
 
@@ -69,27 +73,31 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 | Layer | Package | Responsibility |
 |-------|---------|----------------|
-| **Config** | `config/` | Environment variable loading, provider selection |
-| **ChromaDB Client** | `internal/chromadb/` | ChromaDB v2 REST API wrapper (collections, upsert, query) |
-| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion via LM Studio or OpenAI-compatible APIs |
-| **LLM Brain** | `internal/llmbrain/` | Optional summarization and Q&A via chat completions API |
-| **Models** | `internal/models/` | Data structures (Workspace, Session, Message, SearchRequest) |
-| **Store** | `internal/store/` | Core storage logic: chunking, embedding generation, upsert, search |
-| **Handlers** | `internal/handlers/` | HTTP request handlers for Fiber routes |
-| **Main** | `main.go` | Dependency wiring, middleware setup, route registration |
+| **Config** | `config/` | Layered config: `env > .env > config.toml > defaults` (Honcho `TOML_CONFIG` parity, BurntSushi/toml) |
+| **Security** | `internal/security/` | JWT `w/p/ad` claims, HS256, `scripts/generate_jwt.go` (Honcho `src/security.py` parity) |
+| **ChromaDB Client** | `internal/chromadb/` | ChromaDB v2 REST API wrapper (collections, upsert, query, get, heartbeat) |
+| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion (768d `nomic-embed-text` default) |
+| **LLM Brain** | `internal/llmbrain/` | Chat/summarize via `/chat/completions` (`ChatWithTemp` for reasoning levels) |
+| **Models** | `internal/models/` | Workspace, Session, Message (with `Metadata`), Peer, PeerCard, SearchRequest |
+| **Store** | `internal/store/` | Chunking, embed, upsert (retry), search (vector+BM25 RRF), conclusions, peers, sessions, grep, TTL, scopes |
+| **Dreamer** | `internal/dreamer/` | Periodic `summarize→embed 768d→ws_<id>_conclusions` (Honcho `src/dreamer/`) |
+| **Webhooks** | `internal/webhooks/` | In-mem endpoint registry + `Fire` (Honcho `src/webhooks`) |
+| **Handlers** | `internal/handlers/` | Workspaces, messages, sessions, peers, chat (dialectic), ingest, conclusions, webhooks, brain, metrics |
+| **MCP** | `mcp/` | Stdio MCP proxy (`@modelcontextprotocol/sdk`, 13 tools, Honcho `mcp/` parity) |
+| **Main** | `main.go` | Wiring, JWT/X-API-Key auth, rate limit, health/metrics, dreamer cron |
 
 ---
 
 ## 3. Component Design
 
-### 3.1 Config (`config/config.go`)
+### 3.1 Config (`config/config.go`, `config.toml.example`)
 
-Loads all configuration from environment variables with sensible defaults.
+Layered config, Honcho `src/config.py` parity: `env > .env > config.toml > defaults` via `BurntSushi/toml`. Sections `[app]`, `[db]`, `[auth]`, `[embedding]`, `[llm]`.
 
 **Key design decisions:**
-- Embedding and LLM brain have **separate provider configs** — you can use LM Studio for embeddings but OpenAI for the brain, or vice versa
-- `LLM_ENABLED` is a boolean gate; when false, the brain service is nil and `/brain/*` routes are never registered
-- Fallback chain: env var → `.env` file (via godotenv) → hardcoded default
+- Embedding and LLM brain have **separate provider configs**
+- `LLM_ENABLED` gate; `AUTH_USE_AUTH` JWT gate (Honcho `AUTH_USE_AUTH`)
+- Pinned 768d (`nomic-embed-text`), same dim for `ws_<id>` / `ws_<id>_conclusions` / `ws_<id>_dream` / `ws_<id>_peers`
 
 **Config fields:**
 
@@ -112,6 +120,9 @@ Loads all configuration from environment variables with sensible defaults.
 | `LLMModel` | string | qwen3:8b | LLM model name |
 | `ChromaTenant` | string | default_tenant | ChromaDB tenant (v2 API) |
 | `ChromaDatabase` | string | default_database | ChromaDB database (v2 API) |
+| `TTLHours` | int | 0 | Auto-delete `created_at` < now-TTL (0=disabled) |
+| `AuthUseAuth` | bool | false | Enable JWT auth (`AUTH_USE_AUTH`, Honcho parity) |
+| `AuthJWTSecret` | string | "" | HS256 secret (`AUTH_JWT_SECRET`, `w/p/ad` claims) |
 
 ### 3.2 ChromaDB Client (`internal/chromadb/client.go`)
 
@@ -180,13 +191,17 @@ Core business logic layer. Orchestrates embedding generation, chunking, and Chro
 
 ### 3.6 Handlers (`internal/handlers/`)
 
-Three handler packages, each responsible for a domain:
-
 | Handler | Routes | Responsibility |
 |---------|--------|----------------|
-| `WorkspacesHandler` | GET/POST /workspaces, GET /workspaces/:id | Workspace CRUD (in-memory) |
-| `MessagesHandler` | POST /messages, POST /messages/batch, GET/POST /messages/search, GET /workspaces/:id/stats | Message storage and semantic search |
-| `BrainHandler` | POST /brain/summarize, POST /brain/ask | LLM-powered summarization and Q&A |
+| `WorkspacesHandler` | GET/POST /workspaces, GET /workspaces/:id | Workspace CRUD (Chroma-backed `ws_<id>`, `EnsureCollection`) |
+| `MessagesHandler` | POST /messages, POST /messages/batch, GET/POST /messages/search, GET /workspaces/:id/stats, GET /messages | Messages (scope/peer_ids, NUL-strip, ValidateResourceName, hybrid `?hybrid=true`) |
+| `SessionsHandler` | POST/GET /sessions | Sessions `{peer_ids, scope}` (`SaveSessionMeta` 768d marker) |
+| `PeersHandler` | POST/GET /workspaces/:id/peers, PUT/GET /peers/:peer_id/card | Peers + peer cards (`ws_<id>_peers`, `ws_<id>_peer_cards` 768d) |
+| `ChatHandler` | POST/GET /workspaces/:id/chat | Dialectic chat (observer/observed, `reasoning_level` none/low/medium/high/max) |
+| `IngestHandler` | POST /messages/upload, GET /messages/grep, GET /messages/temporal, DELETE /workspaces/:id/ttl | Upload, grep, temporal search, TTL cleanup |
+| `ConclusionsHandler` | POST/GET /conclusions, DELETE /conclusions/:id, GET /representations | Conclusions (`ws_<id>_conclusions` 768d) + representations |
+| `WebhooksHandler` | POST/GET /webhooks | Endpoint registry |
+| `BrainHandler` | POST /brain/summarize (+ stream SSE), POST /brain/ask | LLM summarize/ask (auto-fetch, `ChatWithTemp`) |
 
 ### 3.7 Main (`main.go`)
 
@@ -573,11 +588,13 @@ HTTP status codes:
 | `LLM_OAI_API_KEY` | Conditional | *(empty)* | API key for LLM provider |
 | `LLM_MODEL` | No | `qwen3:8b` | LLM model name |
 
-### Configuration Precedence
+### Configuration Precedence (Honcho `TOML_CONFIG` parity)
 
-1. Environment variables (highest priority)
-2. `.env` file (loaded via godotenv)
-3. Hardcoded defaults (lowest priority)
+1. Environment variables (highest)
+2. `.env` file (godotenv)
+3. `config.toml` / `config/config.toml` (`BurntSushi/toml`, disable via `VECTORIZER_CONFIG_TOML_DISABLED`)
+4. Hardcoded defaults
+5. Sections `[app]`, `[db]`, `[auth]`, `[embedding]`, `[llm]` in `config.toml.example`
 
 ---
 
@@ -679,38 +696,43 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 
 ## 9. Future Roadmap
 
-### Phase 1: Core Stability (current)
-- [x] Message storage with embedding generation
+### Phase 1: Core Stability — done
+- [x] Message storage with embedding generation (768d, chunking, retry)
 - [x] Semantic search with metadata filtering
-- [x] Optional LLM brain (summarize + ask)
+- [x] Optional LLM brain (summarize + ask, auto-fetch, SSE)
 - [x] Docker Compose deployment
-- [ ] Workspace persistence (SQLite/PostgreSQL for workspace CRUD)
-- [ ] Session/message retrieval endpoints
+- [x] Workspace persistence (`ws_<id>` via Chroma, `EnsureCollection`)
+- [x] Session/message retrieval (`POST/GET /sessions`, `GET /messages`, `GET /messages/temporal`, `grep`)
 
-### Phase 2: Search Enhancements
-- [ ] Hybrid search (semantic + keyword via BM25)
-- [ ] Result ranking and deduplication across chunks from the same message
-- [ ] Pagination support for large result sets
-- [ ] Date range filtering in search
+### Phase 2: Search Enhancements — done
+- [x] Hybrid search (BM25 + RRF `HybridSearch`)
+- [x] Result ranking and deduplication
+- [x] Pagination (`limit`/`offset`, `SearchWithOptions`)
+- [x] Date range filtering (`after`/`before` RFC3339)
 
-### Phase 3: Brain Integration
-- [ ] Auto-fetch workspace/session messages for brain endpoints
-- [ ] Streaming responses for long summaries (SSE)
-- [ ] Conversation history summarization (rolling window)
-- [ ] Multi-turn Q&A with conversation context
+### Phase 3: Brain Integration — done
+- [x] Auto-fetch for brain endpoints
+- [x] Streaming responses (SSE `GET /brain/summarize/stream`, `GET /chat/stream`)
+- [x] Conversation history summarization (dreamer 10m cron)
+- [x] Multi-turn Q&A + dialectic chat (`POST /workspaces/:id/chat` with `reasoning_level`)
 
-### Phase 4: Scale & Reliability
-- [ ] Health check endpoint for ChromaDB dependency
-- [ ] Graceful degradation when embedding service is unavailable
-- [ ] Rate limiting per API key
-- [ ] Metrics endpoints (/metrics for Prometheus)
-- [ ] Batch upsert with retry logic and backoff
+### Phase 4: Scale & Reliability — done
+- [x] Health check with ChromaDB `Heartbeat` (degraded if down)
+- [x] Graceful degradation (queue + retry)
+- [x] Rate limiting (10/s token bucket per API key/IP, 429)
+- [x] Metrics (`/metrics` Prometheus)
+- [x] Batch upsert with retry/backoff (3× exponential)
 
-### Phase 5: Advanced Features
-- [ ] Message TTL / automatic cleanup of old memories
-- [ ] Cross-workspace search (with deduplication)
+### Phase 5: Advanced Features — done (Honcho parity)
+- [x] Message TTL (`DELETE /workspaces/:id/ttl`, `TTL_HOURS`)
+- [x] Cross-workspace search (deduped `Search` fan-out)
+- [x] Webhook notifications (`POST/GET /webhooks`, `Fire`)
+- [x] Conclusions/representations (`POST/GET /conclusions`, `GET /representations`, `ws_<id>_conclusions` 768d)
+- [x] Peers + peer cards (`POST/GET /peers`, `PUT/GET /peers/:peer_id/card`, `ws_<id>_peers`, `ws_<id>_peer_cards`)
+- [x] JWT auth (Honcho `w/p/ad`, `AUTH_USE_AUTH`, `AUTH_JWT_SECRET`, `scripts/generate_jwt.go`)
+- [x] Layered config (`config.toml`, `env > .env > config.toml > defaults`)
+- [x] Eval harness (`evals/run.go`, Honcho `honcho.dev/evals` parity)
 - [ ] Embedding model hot-swap without restart
-- [ ] Webhook notifications for memory events
 - [ ] gRPC interface alongside REST
 
 ---

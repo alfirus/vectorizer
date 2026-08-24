@@ -1,0 +1,24 @@
+# Honcho-compatible layered config: env > .env > config.toml > defaults
+# Copy to config.toml and edit. See docs/BLUEPRINT.md §6.
+
+[app]
+port = 8091
+
+[db]
+host = "localhost"
+port = 8100
+
+[auth]
+use_auth = false
+jwt_secret = ""   # set AUTH_JWT_SECRET or here
+api_key = ""      # DEFAULT_API_KEY
+
+[embedding]
+provider = "lm-studio"   # lm-studio | openai-compatible
+model = "nomic-embed-text"  # 768d, Honcho embedding.compat analogue
+url = "http://localhost:1234/v1"
+
+[llm]
+enabled = false
+provider = "lm-studio"
+model = "qwen3:8b"

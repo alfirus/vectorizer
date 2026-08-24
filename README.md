@@ -9,12 +9,17 @@ A lightweight, self-hosted memory server for AI agents. Stores messages as embed
 
 ## Features
 
-- **Workspace isolation** — each agent has its own namespace (ChromaDB collection)
-- **Semantic search** — find relevant memories by meaning, not keywords
-- **Optional LLM brain** — enable/disable per deployment for summarization & Q&A
-- **Multi-provider embeddings** — LM Studio (local), OpenAI-compatible APIs
-- **API key auth** — protect your endpoint with a secret key
-- **Docker-ready** — one `docker compose up` to run everything
+- **Workspace isolation** — `ws_<id>` collections, no cross-talk
+- **Semantic + hybrid search** — vector cosine (HNSW) + BM25 RRF, `?hybrid=true`, temporal `after`/`before`
+- **Peers + peer cards** — `POST /workspaces/:id/peers`, `PUT /peers/:peer_id/card` (Honcho peer parity)
+- **Dialectic chat** — `POST /workspaces/:id/chat` (observer/observed, `reasoning_level` none/low/medium/high/max)
+- **Conclusions + representations + dreamer** — offline `summarize→embed 768d→ws_<id>_conclusions` (10m cron)
+- **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A
+- **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt.go`, Honcho parity)
+- **Layered config** — `env > .env > config.toml > defaults` (`config.toml.example`)
+- **Docker-ready** — one `docker compose up` (Chroma `1.0.0`, healthchecks, persistent volume)
+- **MCP + Skills + SDKs** — Honcho-style `mcp-remote`, `skills/`, `@vectorizer/sdk` / `vectorizer-ai`
+- **Evals** — `go run evals/run.go -file evals/data/sample.jsonl` (LongMemEval-style recall)
 
 ## Architecture
 
