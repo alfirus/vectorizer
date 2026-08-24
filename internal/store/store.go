@@ -46,10 +46,9 @@ func (s *Store) GetCollectionName(workspaceID string) string {
 func (s *Store) AddMessage(msg *models.Message, content string) error {
 	collName := s.GetCollectionName(msg.WorkspaceID)
 	
-	// Ensure collection exists
+	// Ensure collection exists (workspace-isolated, Honcho workspace parity)
 	if _, err := s.chroma.EnsureCollection(collName, map[string]interface{}{
 		"workspace_id": msg.WorkspaceID,
-		"session_id":   msg.SessionID,
 	}); err != nil {
 		return fmt.Errorf("ensure collection: %w", err)
 	}
@@ -184,7 +183,8 @@ func (s *Store) Search(query string, workspaceID string, sessionID string, role 
 			[]string{"documents", "metadatas", "distances"},
 		)
 		if err != nil {
-			continue // skip on error
+			// Log but skip - preserve Honcho graceful degradation
+			continue
 		}
 
 		for _, qr := range queryResults {

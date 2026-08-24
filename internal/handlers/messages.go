@@ -47,6 +47,14 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	}
 
 	msg := models.NewMessage(req.WorkspaceID, req.SessionID, req.Role, req.Content)
+	if req.Scope != "" || req.PeerID != "" {
+		msg.Metadata = map[string]interface{}{}
+		if req.Scope != "" { msg.Metadata["scope"] = req.Scope }
+		if req.PeerID != "" { msg.Metadata["peer_id"] = req.PeerID }
+	}
+	if len(msg.Content) > 100000 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content too large (max 100k chars)"})
+	}
 
 	if err := h.store.AddMessage(msg, req.Content); err != nil {
 		fmt.Printf("Error adding message: %v\n", err)
@@ -139,7 +147,9 @@ func (h *MessagesHandler) SearchMessages(c *fiber.Ctx) error {
 			"error": "invalid request body",
 		})
 	}
-
+	if len(req.Query) > 5000 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "query too long (max 5000 chars)"})
+	}
 	if req.Query == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "query is required",
@@ -204,6 +214,8 @@ func (h *MessagesHandler) ListMessages(c *fiber.Ctx) error {
 	}
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
+	if limit <= 0 || limit > 100 { limit = 20 }
+	if offset < 0 { offset = 0 }
 	docs, err := h.store.GetMessages(wsID, c.Query("session_id"), limit, offset)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list messages"})

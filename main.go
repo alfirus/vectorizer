@@ -93,7 +93,11 @@ func main() {
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
-			return c.Status(500).JSON(fiber.Map{
+			code := fiber.StatusInternalServerError
+			if e, ok := err.(*fiber.Error); ok {
+				code = e.Code
+			}
+			return c.Status(code).JSON(fiber.Map{
 				"error": err.Error(),
 			})
 		},
@@ -110,7 +114,7 @@ func main() {
 	// Auth: JWT (if AUTH_USE_AUTH=true) else legacy X-API-Key. Mirrors Honcho src/security.py require_auth.
 	app.Use(func(c *fiber.Ctx) error {
 		path := c.Path()
-		if path == "/api/v1/health" || path == "/health" || path == "/" || c.Method() == "OPTIONS" {
+		if path == "/api/v1/health" || path == "/api/v1/metrics" || path == "/health" || path == "/" || c.Method() == "OPTIONS" {
 			return c.Next()
 		}
 		if cfg.AuthUseAuth && cfg.AuthJWTSecret != "" {
@@ -127,13 +131,13 @@ func main() {
 				return c.Status(401).JSON(fiber.Map{"error": "invalid token"})
 			}
 			c.Locals("jwt", claims)
-			// Enforce workspace scoping: if claims has w, it must match :workspace_id param when present
+			// Enforce workspace scoping: if claims has w, it must match any workspace param
 			if claims.Workspace != "" && !claims.Admin {
 				if ws := c.Params("workspace_id"); ws != "" && ws != claims.Workspace {
 					return c.Status(403).JSON(fiber.Map{"error": "workspace mismatch"})
 				}
-				if ws := c.Params("id"); ws != "" && ws != claims.Workspace {
-					// for /workspaces/:id — allow but log
+				if ws := c.Params("id"); ws != "" && !isHealthOrMetrics(c.Path()) && ws != claims.Workspace {
+					return c.Status(403).JSON(fiber.Map{"error": "workspace mismatch"})
 				}
 			}
 			return c.Next()
@@ -150,12 +154,16 @@ func main() {
 		return c.Next()
 	})
 
-	// Rate limiter (phase 4) - simple token bucket 10/s per IP or API key
+	// Rate limiter (phase 4) - simple token bucket 10/s per IP / API key / JWT workspace
 	rl := newRateLimiter(10, time.Second)
 	app.Use(func(c *fiber.Ctx) error {
 		key := c.Get("X-API-Key")
 		if key == "" {
-			key = c.IP()
+			if claims, ok := c.Locals("jwt").(*security.Claims); ok && claims != nil && claims.Workspace != "" {
+				key = "jwt:" + claims.Workspace
+			} else {
+				key = c.IP()
+			}
 		}
 		if !rl.Allow(key) {
 			return c.Status(429).JSON(fiber.Map{"error": "rate limit exceeded"})
@@ -177,7 +185,7 @@ func main() {
 			status = "degraded"
 		}
 		return c.JSON(fiber.Map{
-			"status": status, "name": "vectorizer", "version": "0.1.0",
+			"status": status, "name": "vectorizer", "version": "0.2.0",
 			"llm_enabled": cfg.LLMEnabled, "chromadb": chromaStatus, "embedding_model": cfg.EmbedModel,
 		})
 	})
@@ -373,4 +381,8 @@ func (r *rateLimiter) Allow(key string) bool {
 	for _, t := range times { if t.After(cutoff) { filtered = append(filtered, t) } }
 	if len(filtered) >= r.limit { r.tokens[key] = filtered; return false }
 	r.tokens[key] = append(filtered, now); return true
+}
+
+func isHealthOrMetrics(path string) bool {
+	return path == "/api/v1/health" || path == "/api/v1/metrics" || path == "/health"
 }

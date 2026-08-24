@@ -17,8 +17,12 @@ func (h *WorkspacesHandler) CreateWorkspace(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
+	req.Name = models.SanitizeString(req.Name)
 	if req.Name == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name is required"})
+	}
+	if !models.ValidateResourceName(req.Name) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid name format (a-zA-Z0-9_-, 1-512 chars)"})
 	}
 	ws := models.NewWorkspace(req.Name)
 	if err := h.store.EnsureWorkspace(ws.ID); err != nil {
