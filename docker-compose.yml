@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  vectorizer:
+    build: .
+    container_name: vectorizer
+    ports:
+      - "${PORT:-8091}:${PORT:-8091}"
+    env_file:
+      - .env
+    depends_on:
+      chromadb:
+        condition: service_started
+    restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: vectorizer-chromadb
+    ports:
+      - "${CHROMA_PORT:-8100}:8100"
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
