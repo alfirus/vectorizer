@@ -23,7 +23,7 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/vectorizer .
 
-EXPOSE 8091
+EXPOSE 8091 50051
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:8091/api/v1/health || exit 1

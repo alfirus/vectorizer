@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
+	"google.golang.org/grpc"
 
 	"github.com/alfirus/vectorizer/config"
 	"github.com/alfirus/vectorizer/internal/chromadb"
@@ -19,7 +21,9 @@ import (
 	"github.com/alfirus/vectorizer/internal/llmbrain"
 	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/store"
+	grpcsrv "github.com/alfirus/vectorizer/internal/grpc"
 	"github.com/alfirus/vectorizer/internal/webhooks"
+	pb "github.com/alfirus/vectorizer/vectorizerpb"
 )
 
 func main() {
@@ -213,6 +217,10 @@ func main() {
 		n,_:=store.TTLDelete(c.Params("id"), before)
 		return c.JSON(fiber.Map{"deleted":n})
 	})
+	// Admin hot-swap (no restart)
+	adminH := handlers.NewAdminHandler(embedService, brain)
+	api.Post("/admin/embedding", adminH.SetEmbedding)
+	api.Get("/admin/embedding", adminH.GetEmbedding)
 
 	// Peers + chat (dialectic, Honcho peer.chat parity)
 	peersH := handlers.NewPeersHandler(store)
@@ -236,6 +244,17 @@ func main() {
 	whHandler := handlers.NewWebhooksHandler(whMgr)
 	api.Post("/webhooks", whHandler.Register)
 	api.Get("/webhooks", whHandler.List)
+
+	// gRPC alongside REST (Honcho gRPC parity, Phase 5)
+	go func() {
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
+		if err == nil {
+			gs := grpc.NewServer()
+			pb.RegisterVectorizerServiceServer(gs, grpcsrv.New(store, brain))
+			log.Printf("gRPC listening on :%d", cfg.GRPCPort)
+			_ = gs.Serve(lis)
+		}
+	}()
 
 	// Dreamer (offline, same 768d)
 	if brain != nil {

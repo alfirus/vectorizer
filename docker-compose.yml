@@ -4,6 +4,7 @@ services:
     container_name: vectorizer
     ports:
       - "${PORT:-8091}:${PORT:-8091}"
+      - "${GRPC_PORT:-50051}:${GRPC_PORT:-50051}"
     env_file:
       - .env
     environment:

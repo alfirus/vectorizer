@@ -25,6 +25,10 @@ func New(baseURL, apiKey, model string) *Service {
 	}
 }
 
+func (s *Service) Model() string { return s.model }
+func (s *Service) SetModel(model string) { s.model = model }
+func (s *Service) SetBaseURL(url string) { s.baseURL = url }
+
 // EmbeddingResult is a single embedding vector.
 type EmbeddingResult struct {
 	Vector []float32 `json:"-"` // not serialized

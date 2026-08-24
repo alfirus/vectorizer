@@ -1,0 +1,59 @@
+syntax = "proto3";
+package vectorizer.v1;
+option go_package = "github.com/alfirus/vectorizer/vectorizerpb";
+
+service VectorizerService {
+  rpc AddMessage(AddMessageRequest) returns (AddMessageResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Chat(ChatRequest) returns (ChatResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message AddMessageRequest {
+  string workspace_id = 1;
+  string session_id = 2;
+  string role = 3;
+  string content = 4;
+}
+
+message AddMessageResponse {
+  string id = 1;
+  bool stored = 2;
+}
+
+message SearchRequest {
+  string query = 1;
+  string workspace_id = 2;
+  string session_id = 3;
+  string role = 4;
+  int32 n_results = 5;
+}
+
+message SearchResult {
+  string id = 1;
+  string document = 2;
+  map<string, string> metadata = 3;
+  float distance = 4;
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+}
+
+message ChatRequest {
+  string workspace_id = 1;
+  string query = 2;
+  string observer = 3;
+  string observed = 4;
+  string reasoning_level = 5;
+}
+
+message ChatResponse {
+  string answer = 1;
+}
+
+message HealthRequest {}
+message HealthResponse {
+  string status = 1;
+  string version = 2;
+}

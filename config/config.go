@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	Port        int    `env:"PORT"`
+	GRPCPort    int    `env:"GRPC_PORT"`
 	ChromaHost  string `env:"CHROMA_HOST"`
 	ChromaPort  int    `env:"CHROMA_PORT"`
 	DefaultAPIKey string `env:"DEFAULT_API_KEY"`
@@ -85,7 +86,18 @@ func Load() *Config {
 	if tc == nil {
 		tc = loadTOML("config/config.toml")
 	}
+	grpcPort := 50051
+	if tc != nil {
+		// allow [grpc] port in toml if present (optional)
+		var raw map[string]interface{}
+		if _, err := toml.DecodeFile("config.toml", &raw); err == nil {
+			if g, ok := raw["grpc"].(map[string]interface{}); ok {
+				if p, ok := g["port"].(int64); ok { grpcPort = int(p) }
+			}
+		}
+	}
 	return &Config{
+		GRPCPort: getEnvInt("GRPC_PORT", grpcPort),
 		Port:            getEnvIntWithTOML("PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.App.Port }), 8091),
 		ChromaHost:      getEnvStringWithTOML("CHROMA_HOST", tcStr(tc, func(c *tomlConfig) string { return c.DB.Host }), "localhost"),
 		ChromaPort:      getEnvIntWithTOML("CHROMA_PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.DB.Port }), 8100),

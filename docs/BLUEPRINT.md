@@ -732,8 +732,8 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] JWT auth (Honcho `w/p/ad`, `AUTH_USE_AUTH`, `AUTH_JWT_SECRET`, `scripts/generate_jwt.go`)
 - [x] Layered config (`config.toml`, `env > .env > config.toml > defaults`)
 - [x] Eval harness (`evals/run.go`, Honcho `honcho.dev/evals` parity)
-- [ ] Embedding model hot-swap without restart
-- [ ] gRPC interface alongside REST
+- [x] Embedding model hot-swap without restart (`POST /admin/embedding {model, base_url}`, `GET /admin/embedding`, `embedService.SetModel`)
+- [x] gRPC interface alongside REST (`proto/vectorizer.proto`, `vectorizerpb`, `internal/grpc`, `GRPC_PORT` 50051, `docker-compose` + `Dockerfile` expose)
 
 ---
 
