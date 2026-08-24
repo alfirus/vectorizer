@@ -16,12 +16,12 @@ const maxChunkSize = 4000 // chars per chunk
 // Store manages workspace isolation, session/message storage, and semantic search.
 type Store struct {
 	chroma     *chromadb.Client
-	embed      *embedding.Service
+	embed      embedding.Embedder
 	tenant     string
 	database   string
 }
 
-func New(chromaClient *chromadb.Client, embedService *embedding.Service) *Store {
+func New(chromaClient *chromadb.Client, embedService embedding.Embedder) *Store {
 	return &Store{
 		chroma: chromaClient,
 		embed:  embedService,

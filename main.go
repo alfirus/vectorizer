@@ -59,8 +59,10 @@ func main() {
 	}
 
 	// Initialize embedding service (Qwen3 1536d MRL via openai-compatible, 1536d)
-	var embedService *embedding.Service
-	if cfg.EmbedProvider == "openai-compatible" && cfg.OAICompatibleURL != "" {
+	var embedService embedding.Embedder
+	if cfg.EmbedProvider == "google" && cfg.GoogleAPIKey != "" {
+		embedService = embedding.NewGoogle(cfg.GoogleAPIKey, cfg.EmbedModel, cfg.EmbedDimensions)
+	} else if cfg.EmbedProvider == "openai-compatible" && cfg.OAICompatibleURL != "" {
 		embedService = embedding.NewWithDimensions(cfg.OAICompatibleURL, cfg.OAIAPIKey, cfg.EmbedModel, cfg.EmbedDimensions)
 	} else if cfg.EmbedProvider == "openai-compatible" {
 		// Fallback to LMStudio URL if OAI URL not set but provider is openai-compatible (e.g. local vLLM)

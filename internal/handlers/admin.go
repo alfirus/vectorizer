@@ -7,11 +7,11 @@ import (
 )
 
 type AdminHandler struct {
-	embed *embedding.Service
+	embed embedding.Embedder
 	brain *llmbrain.Service
 }
 
-func NewAdminHandler(embed *embedding.Service, brain *llmbrain.Service) *AdminHandler {
+func NewAdminHandler(embed embedding.Embedder, brain *llmbrain.Service) *AdminHandler {
 	return &AdminHandler{embed: embed, brain: brain}
 }
 

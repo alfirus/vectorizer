@@ -15,12 +15,13 @@ type Config struct {
 	DefaultAPIKey string `env:"DEFAULT_API_KEY"`
 	
 	// Embedding config ( 1536d via Qwen3-Embedding-4B MRL)
-	EmbedProvider   string `env:"EMBED_PROVIDER"` // "lm-studio" or "openai-compatible"
+	EmbedProvider   string `env:"EMBED_PROVIDER"` // "lm-studio", "openai-compatible", or "google"
 	LmStudioURL     string `env:"LM_STUDIO_URL"`
 	OAICompatibleURL string `env:"OAI_COMPATIBLE_URL"`
 	OAIAPIKey       string `env:"OAI_API_KEY"`
-	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "Qwen/Qwen3-Embedding-4B-GGUF" (1536d MRL)
-	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL)
+	GoogleAPIKey    string `env:"GOOGLE_API_KEY"` // Google AI Studio API key
+	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "Qwen/Qwen3-Embedding-4B-GGUF" or "text-embedding-004"
+	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), 768 for Google
 	
 	// LLM Brain config (optional)
 	LLMEnabled        bool   `env:"LLM_ENABLED"`
@@ -109,6 +110,7 @@ func Load() *Config {
 		LmStudioURL:     getEnvStringWithTOML("LM_STUDIO_URL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.URL }), "http://localhost:1234/v1"),
 		OAICompatibleURL: getEnvString("OAI_COMPATIBLE_URL", ""),
 		OAIAPIKey:       os.Getenv("OAI_API_KEY"),
+		GoogleAPIKey:    os.Getenv("GOOGLE_API_KEY"),
 		EmbedModel:      getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "Qwen/Qwen3-Embedding-4B-GGUF"),
 		EmbedDimensions: getEnvIntWithTOML("EMBED_DIMENSIONS", tcAppInt(tc, func(c *tomlConfig) int { return c.Embedding.Dimensions }), 1536),
 
