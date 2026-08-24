@@ -26,6 +26,10 @@ type Config struct {
 	LLMOAIAPIKey      string `env:"LLM_OAI_API_KEY"`
 	LLMModel          string `env:"LLM_MODEL"` // e.g. "qwen3:8b" or "gpt-4o-mini"
 	
+	// TTL / workspace config
+	TTLHours       int    `env:"TTL_HOURS"` // 0 = disabled
+	WorkspaceConfig string `env:"WORKSPACE_CONFIG"` // json overrides
+
 	// ChromaDB config
 	ChromaTenant     string `env:"CHROMA_TENANT"`
 	ChromaDatabase   string `env:"CHROMA_DATABASE"`
@@ -51,6 +55,8 @@ func Load() *Config {
 		LLMOAIAPIKey:      os.Getenv("LLM_OAI_API_KEY"),
 		LLMModel:          getEnvString("LLM_MODEL", "qwen3:8b"),
 		
+		TTLHours:       getEnvInt("TTL_HOURS", 0),
+
 		ChromaTenant:     getEnvString("CHROMA_TENANT", "default_tenant"),
 		ChromaDatabase:   getEnvString("CHROMA_DATABASE", "default_database"),
 	}

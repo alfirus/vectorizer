@@ -162,7 +162,8 @@ func main() {
 	})
 	api.Get("/metrics", func(c *fiber.Ctx) error {
 		c.Set("Content-Type", "text/plain")
-		return c.SendString("# HELP vectorizer_up 1 if up\nvectorizer_up 1\n")
+		// Honcho telemetry parity: counters placeholder
+		return c.SendString("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total 0\n")
 	})
 
 	// Workspaces
@@ -182,8 +183,29 @@ func main() {
 	api.Get("/messages/search", messagesHandler.SearchMessagesSimple)
 	api.Get("/workspaces/:id/stats", messagesHandler.GetWorkspaceStats)
 
-	// Messages retrieval
+	// Messages retrieval + ingestion + temporal
 	api.Get("/messages", messagesHandler.ListMessages)
+	ingestH := handlers.NewIngestHandler(store)
+	api.Post("/messages/upload", ingestH.Upload)
+	api.Get("/messages/grep", ingestH.Grep)
+	api.Get("/messages/temporal", ingestH.Temporal)
+	api.Delete("/workspaces/:id/ttl", func(c *fiber.Ctx) error {
+		if cfg.TTLHours==0 && c.Query("before")=="" { return c.Status(400).JSON(fiber.Map{"error":"TTL disabled or before required"})}
+		before:=c.Query("before")
+		if before=="" { before=time.Now().Add(-time.Duration(cfg.TTLHours)*time.Hour).Format(time.RFC3339) }
+		n,_:=store.TTLDelete(c.Params("id"), before)
+		return c.JSON(fiber.Map{"deleted":n})
+	})
+
+	// Peers + chat (dialectic, Honcho peer.chat parity)
+	peersH := handlers.NewPeersHandler(store)
+	api.Post("/workspaces/:workspace_id/peers", peersH.CreatePeer)
+	api.Get("/workspaces/:workspace_id/peers", peersH.ListPeers)
+	api.Put("/workspaces/:workspace_id/peers/:peer_id/card", peersH.SetPeerCard)
+	api.Get("/workspaces/:workspace_id/peers/:peer_id/card", peersH.GetPeerCard)
+	chatH := handlers.NewChatHandler(store, brain)
+	api.Post("/workspaces/:workspace_id/chat", chatH.Chat)
+	api.Get("/workspaces/:workspace_id/chat/stream", chatH.ChatStream)
 
 	// Conclusions / representation
 	conclHandler := handlers.NewConclusionsHandler(store)

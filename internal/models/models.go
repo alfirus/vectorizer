@@ -94,3 +94,18 @@ type SearchResult struct {
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 	Distance float32                `json:"distance,omitempty"`
 }
+
+type Peer struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	WorkspaceID string                 `json:"workspace_id"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt   time.Time              `json:"created_at"`
+}
+
+type PeerCard struct {
+	PeerID    string   `json:"peer_id"`
+	PeerName  string   `json:"peer_name"`
+	Lines     []string `json:"lines"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

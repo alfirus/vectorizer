@@ -3,6 +3,7 @@ import { parseConfig, createClient } from "./config.js";
 import { registerWorkspaceTools } from "./tools/workspace.js";
 import { registerMessageTools } from "./tools/messages.js";
 import { registerBrainTools } from "./tools/brain.js";
+import { registerPeerTools } from "./tools/peers.js";
 
 export function createServer() {
   const server = new McpServer({ name: "@vectorizer/mcp", version: "0.1.0" });
@@ -11,5 +12,6 @@ export function createServer() {
   registerWorkspaceTools(server, getClient);
   registerMessageTools(server, getClient);
   registerBrainTools(server, getClient);
+  registerPeerTools(server, getClient);
   return server;
 }

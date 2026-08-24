@@ -49,6 +49,35 @@ func parseDate(s string) (time.Time, bool) {
 	return t, true
 }
 
+func (s *Store) Grep(workspaceID, sessionID, q string, limit int) ([]map[string]interface{}, error) {
+	docs, err := s.GetMessages(workspaceID, sessionID, 200, 0)
+	if err != nil { return nil, err }
+	q = strings.ToLower(q)
+	var out []map[string]interface{}
+	for _, d := range docs {
+		doc, _ := d["document"].(string)
+		if strings.Contains(strings.ToLower(doc), q) { out=append(out, d); if len(out)>=limit { break } }
+	}
+	return out, nil
+}
+
+func (s *Store) TTLDelete(workspaceID string, olderThan string) (int, error) {
+	t, ok := parseDate(olderThan)
+	if !ok { return 0, fmt.Errorf("invalid date") }
+	collName := s.GetCollectionName(workspaceID)
+	coll, err := s.chroma.GetCollection(collName)
+	if err != nil { return 0, err }
+	docs, _ := s.chroma.GetDocuments(coll.ID, map[string]interface{}{"workspace_id": workspaceID}, 1000, 0)
+	var ids []string
+	for _, d := range docs {
+		m, _ := d["metadata"].(map[string]interface{})
+		raw, _ := m["created_at"].(string)
+		if pt, ok2:=parseDate(raw); ok2 && pt.Before(t) { ids=append(ids, fmt.Sprint(d["id"])) }
+	}
+	if len(ids)>0 { _ = s.chroma.DeleteDocuments(coll.ID, ids) }
+	return len(ids), nil
+}
+
 func (s *Store) SaveSessionMeta(workspaceID, sessionID string, peerIDs []string, scope string) error {
 	collName := s.GetCollectionName(workspaceID)
 	coll, err := s.chroma.EnsureCollection(collName, map[string]interface{}{"workspace_id": workspaceID})
