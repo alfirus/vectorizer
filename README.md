@@ -313,13 +313,44 @@ This mirrors the `Store → Reason (deriver) → Query (chat/representation) →
 
 MCP (Claude Desktop, OpenCode, OpenClaw, Hermes via `mcp-remote`):
 ```json
-{"mcpServers":{"vectorizer":{"command":"node","args":["./mcp/dist/index.js"],"env":{"VECTORIZER_URL":"http://localhost:8091","VECTORIZER_API_KEY":"...","VECTORIZER_WORKSPACE_ID":"my-agent"}}}}
+{"mcpServers":{"vectorizer":{"command":"node","args":["./mcp/dist/index.js"],"env":{"VECTORIZER_URL":"http://localhost:8091","VECTORIZER_API_KEY":"Bearer <jwt>","VECTORIZER_WORKSPACE_ID":"shared-proj"}}}}
 ```
-Tools: `vectorizer_search`, `vectorizer_add_message`, `vectorizer_ask`, `vectorizer_summarize`, etc. (see `mcp/README.md`).
+Tools: `vectorizer_search`, `vectorizer_add_message` (strict `peer_id` must match JWT `p`), `vectorizer_chat` (dialectic), `vectorizer_create_peer`, etc. (see `mcp/README.md:1`).
 
-Skill: `.agents/skills/vectorizer/SKILL.md` + `skills/vectorizer-memory/` — recall/record loop (store after turns, search before answering).
+Skill: `skills/vectorizer/SKILL.md` + `skills/vectorizer-memory/` — recall/record loop (store after turns with `peer_id`, search before answering with `scope`).
 
 SDKs: `sdks/typescript` (`@vectorizer/sdk`) + `sdks/python` (`vectorizer-ai`) — `new Vectorizer({baseUrl, apiKey}).search("...")`.
+
+## 3-Agent Setup (Option C — Recommended)
+
+Shared `shared-proj`, peers `alpha/beta/gamma`, strict JWT (`peer_id` must match `p`), all share LM Studio GGUF `Qwen3-Embedding-4B` `1536d` at `http://host.docker.internal:1234/v1`:
+
+```bash
+# 1. Generate JWTs (requires AUTH_JWT_SECRET)
+export AUTH_JWT_SECRET=$(openssl rand -hex 32); echo "AUTH_JWT_SECRET=$AUTH_JWT_SECRET" >> .env
+go run ./scripts/generate_jwt --workspace shared-proj --admin --expires 30d  # → ADMIN_TOKEN
+go run ./scripts/generate_jwt --workspace shared-proj --peer alpha --expires 30d  # → ALPHA_JWT
+go run ./scripts/generate_jwt --workspace shared-proj --peer beta --expires 30d   # → BETA_JWT
+go run ./scripts/generate_jwt --workspace shared-proj --peer gamma --expires 30d  # → GAMMA_JWT
+
+# 2. Provision workspace/peers/scopes/sessions (max coverage)
+VECTORIZER_URL=http://localhost:8091 ADMIN_TOKEN=$ADMIN_TOKEN ./scripts/provision_option_c.sh
+# Creates: scopes proj-frontend, proj-backend, proj-research, shared-all, private-alpha/beta/gamma
+# Sessions: pair-alpha-beta, pair-beta-gamma, pair-alpha-gamma, pair-all, sess-*-private
+
+# 3. Per-agent MCP (repeat for each agent, change JWT + peer_id handling)
+# Agent alpha: mcp env VECTORIZER_API_KEY=Bearer $ALPHA_JWT, calls always with peer_id=alpha
+# Agent beta:  Bearer $BETA_JWT, peer_id=beta — rejected if mismatched (403)
+# Agent gamma: Bearer $GAMMA_JWT, peer_id=gamma
+
+# 4. Docker (LM Studio GGUF on host)
+docker compose up -d  # vectorizer + chromadb; qwen-embed profile "gpu" ignored (LM Studio mode)
+# Verify LM Studio loads Qwen3-Embedding-4B-GGUF and returns 1536d:
+curl -X POST http://host.docker.internal:1234/v1/embeddings -H "Content-Type: application/json" \
+  -d '{"model":"Qwen/Qwen3-Embedding-4B-GGUF","input":["test"],"dimensions":1536}' | jq '.data[0].embedding | length' # → 1536
+```
+
+Scopes coverage suggestion (already in provision script): `proj-frontend`, `proj-backend`, `proj-research` (cross-agent pairs), `shared-all` (all pairs), `private-*` per agent. Search with `where.scope="proj-frontend"` to isolate.
 
 ## Development
 

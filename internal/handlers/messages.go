@@ -8,6 +8,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/alfirus/vectorizer/internal/security"
+
 	"github.com/alfirus/vectorizer/internal/models"
 	"github.com/alfirus/vectorizer/internal/store"
 )
@@ -36,6 +38,12 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil { return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"}) }
 	if req.WorkspaceID == "" || req.SessionID == "" || req.Role == "" || req.Content == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id, session_id, role, and content are required"})
+	}
+	// Strict peer JWT: if JWT has p, enforce peer_id matches (except admin)
+	if claims, ok := c.Locals("jwt").(*security.Claims); ok && claims != nil && claims.Peer != "" && !claims.Admin {
+		if req.PeerID != "" && req.PeerID != claims.Peer {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "peer_id mismatch with JWT"})
+		}
 	}
 	for _, n := range []string{req.WorkspaceID, req.SessionID} {
 		if !models.ValidateResourceName(n) { return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id format"}) }

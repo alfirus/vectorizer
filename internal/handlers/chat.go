@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/alfirus/vectorizer/internal/llmbrain"
+	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
@@ -34,6 +35,13 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid body"})
 	}
 	if req.Query == "" { return c.Status(400).JSON(fiber.Map{"error": "query required"})}
+	// Strict peer JWT: observer must match JWT p if present
+	if claims, ok := c.Locals("jwt").(*security.Claims); ok && claims != nil && claims.Peer != "" && !claims.Admin {
+		if req.Observer != "" && req.Observer != claims.Peer {
+			return c.Status(403).JSON(fiber.Map{"error": "observer mismatch with JWT"})
+		}
+		if req.Observer == "" { req.Observer = claims.Peer }
+	}
 	observer := req.Observer; if observer == "" { observer = req.Observed }
 	observed := req.Observed; if observed == "" { observed = observer }
 	if observer == "" { observer = "default" ; observed = observer }
