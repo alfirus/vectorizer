@@ -14,12 +14,14 @@ import (
 
 // MessagesHandler handles message storage and retrieval.
 type MessagesHandler struct {
-	store *store.Store
+	store   *store.Store
+	deriver interface{ Enqueue(string,string,string,string,string) }
 }
 
 func NewMessagesHandler(store *store.Store) *MessagesHandler {
 	return &MessagesHandler{store: store}
 }
+func (h *MessagesHandler) SetDeriver(d interface{ Enqueue(string,string,string,string,string) }) { h.deriver = d }
 
 // AddMessage stores a new message with embedding.
 func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
@@ -58,10 +60,9 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 
 	if err := h.store.AddMessage(msg, req.Content); err != nil {
 		fmt.Printf("Error adding message: %v\n", err)
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to store message",
-		})
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to store message"})
 	}
+	if h.deriver != nil { h.deriver.Enqueue(msg.WorkspaceID, msg.SessionID, req.PeerID, msg.ID, msg.Content) }
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"id":          msg.ID,

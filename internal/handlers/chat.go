@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -16,7 +17,7 @@ type ChatHandler struct {
 
 func NewChatHandler(s *store.Store, b *llmbrain.Service) *ChatHandler { return &ChatHandler{store: s, brain: b} }
 
-// POST /workspaces/:workspace_id/chat - dialectic agentic chat (Honcho peer.chat equivalent)
+// POST /workspaces/:workspace_id/chat - dialectic agentic chat (Honcho peer.chat parity, tool loop)
 func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	if h.brain == nil {
 		return c.Status(503).JSON(fiber.Map{"error": "LLM brain not enabled"})
@@ -37,47 +38,89 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	observed := req.Observed; if observed == "" { observed = observer }
 	if observer == "" { observer = "default" ; observed = observer }
 
-	// Gather context: peer cards + search memory + messages
-	var ctxParts []string
-	if lines, _ := h.store.GetPeerCard(ws, observed); len(lines)>0 {
-		ctxParts = append(ctxParts, fmt.Sprintf("Peer card for %s:\n%s", observed, strings.Join(lines, "\n")))
-	}
-	if observer != observed {
-		if lines, _ := h.store.GetPeerCard(ws, observer); len(lines)>0 {
-			ctxParts = append(ctxParts, fmt.Sprintf("Peer card for %s (observer):\n%s", observer, strings.Join(lines, "\n")))
-		}
-	}
-	// search conclusions + messages
-	if results, err := h.store.Search(req.Query, ws, req.SessionID, "", 5); err == nil {
-		for _, r := range results { ctxParts = append(ctxParts, r.Document) }
-	}
-	if rep, _, _ := h.store.GetRepresentation(ws, observed, req.SessionID, 5); rep != "" {
-		ctxParts = append(ctxParts, "Representation:\n"+rep)
-	}
-	ctx := strings.Join(ctxParts, "\n\n")
-	if len(ctx) > 8000 { ctx = ctx[:8000] }
+	// Initial context: peer cards + representation
+	obsCard,_ := h.store.GetPeerCard(ws, observer)
+	obsdCard,_ := h.store.GetPeerCard(ws, observed)
+	system := llmbrain.AgentSystemPrompt(observer, observed, obsCard, obsdCard)
 
 	level := strings.ToLower(req.ReasoningLevel)
 	if level == "" { level = "low" }
-	nResults := map[string]int{"none":1,"low":5,"medium":10,"high":15,"max":20}[level]
-	if nResults==0 { nResults=5 }
-	// If level requests more, redo search with larger k
-	if nResults > 5 {
-		if results, err := h.store.Search(req.Query, ws, req.SessionID, "", nResults); err == nil {
-			ctxParts = ctxParts[:0]
-			if lines, _ := h.store.GetPeerCard(ws, observed); len(lines)>0 { ctxParts = append(ctxParts, fmt.Sprintf("Peer card for %s:\n%s", observed, strings.Join(lines, "\n"))) }
-			for _, r := range results { ctxParts = append(ctxParts, r.Document) }
-			ctx = strings.Join(ctxParts, "\n\n")
-			if len(ctx) > 12000 { ctx = ctx[:12000] }
-		}
-	}
+	maxTools := map[string]int{"none":0,"low":2,"medium":4,"high":6,"max":8}[level]
+	if maxTools==0 && level!="none" { maxTools=2 }
 	temperature := map[string]float32{"none":0.1,"low":0.3,"medium":0.5,"high":0.7,"max":0.9}[level]
-	system := fmt.Sprintf("You are answering from %s's perspective about %s. Use provided context. If peer cards exist, they are constructed summaries from same observations. Reasoning level: %s.", observer, observed, level)
-	resp, err := h.brain.ChatWithTemp(system, ctx, req.Query, temperature)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "chat failed: "+err.Error()})
+	if temperature==0 { temperature=0.3 }
+
+	// Seed context via search_memory + representation (like Honcho preflight)
+	var seedCtx []string
+	if rep, _, _ := h.store.GetRepresentation(ws, observed, req.SessionID, 5); rep != "" {
+		seedCtx = append(seedCtx, "Representation:\n"+rep)
 	}
-	return c.JSON(fiber.Map{"answer": resp, "observer": observer, "observed": observed})
+	seedCtxStr := strings.Join(seedCtx, "\n\n")
+	if len(seedCtxStr) > 8000 { seedCtxStr = seedCtxStr[:8000] }
+
+	// Build message history for agentic loop
+	messages := []map[string]interface{}{
+		{"role": "system", "content": system},
+		{"role": "user", "content": fmt.Sprintf("Context:\n%s\n\nQuestion: %s", seedCtxStr, req.Query)},
+	}
+
+	answer := ""
+	for iter := 0; iter <= maxTools; iter++ {
+		resp, err := h.brain.ChatWithHistory(messages, temperature)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "chat failed: "+err.Error()})
+		}
+		// Check for tool call JSON
+		toolName, toolArgs := parseToolCall(resp)
+		if toolName == "" || iter == maxTools {
+			answer = resp
+			break
+		}
+		// Execute tool
+		toolResult := h.execTool(ws, req.SessionID, toolName, toolArgs)
+		messages = append(messages, map[string]interface{}{"role": "assistant", "content": resp})
+		messages = append(messages, map[string]interface{}{"role": "user", "content": fmt.Sprintf("Tool %s result:\n%s\n\nContinue or answer.", toolName, toolResult)})
+	}
+	return c.JSON(fiber.Map{"answer": answer, "observer": observer, "observed": observed})
+}
+
+func parseToolCall(s string) (string, map[string]interface{}) {
+	// Extract JSON object containing "tool"
+	start := strings.Index(s, `{"tool"`)
+	if start == -1 { return "", nil }
+	end := strings.LastIndex(s[start:], "}")
+	if end == -1 { return "", nil }
+	raw := s[start : start+end+1]
+	var obj struct{ Tool string `json:"tool"`; Args map[string]interface{} `json:"args"`}
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil { return "", nil }
+	return obj.Tool, obj.Args
+}
+
+func (h *ChatHandler) execTool(ws, sessionID, tool string, args map[string]interface{}) string {
+	switch tool {
+	case "search_memory":
+		q,_:=args["query"].(string)
+		res,_:=h.store.QueryConclusions(ws, q, 5)
+		b,_:=json.Marshal(res); return string(b)
+	case "search_messages":
+		q,_:=args["query"].(string)
+		res,_:=h.store.Search(q, ws, sessionID, "", 5)
+		b,_:=json.Marshal(res); return string(b)
+	case "grep_messages":
+		pat,_:=args["pattern"].(string); if pat=="" { pat,_=args["query"].(string) }
+		res,_:=h.store.Grep(ws, sessionID, pat, 10)
+		b,_:=json.Marshal(res); return string(b)
+	case "get_reasoning_chain":
+		cid,_:=args["conclusion_id"].(string)
+		res,_:=h.store.GetReasoningChain(ws, cid)
+		b,_:=json.Marshal(res); return string(b)
+	case "get_observation_context":
+		cid,_:=args["chunk_id"].(string); sid,_:=args["session_id"].(string); if sid=="" { sid=sessionID }
+		res,_:=h.store.GetObservationContext(ws, sid, cid, 2)
+		b,_:=json.Marshal(res); return string(b)
+	default:
+		return "unknown tool"
+	}
 }
 
 func (h *ChatHandler) ChatStream(c *fiber.Ctx) error {

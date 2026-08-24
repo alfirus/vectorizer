@@ -15,6 +15,7 @@ import (
 
 	"github.com/alfirus/vectorizer/config"
 	"github.com/alfirus/vectorizer/internal/chromadb"
+	"github.com/alfirus/vectorizer/internal/deriver"
 	"github.com/alfirus/vectorizer/internal/dreamer"
 	"github.com/alfirus/vectorizer/internal/embedding"
 	"github.com/alfirus/vectorizer/internal/handlers"
@@ -85,9 +86,18 @@ func main() {
 		}
 	}
 
+	// Initialize deriver (Honcho deriver parity, async conclusions, 1536d)
+	var drv *deriver.Deriver
+	if brain != nil {
+		drv = deriver.New(store, brain)
+		drv.Start()
+		defer drv.Stop()
+	}
+
 	// Initialize handlers
 	workspacesHandler := handlers.NewWorkspacesHandler(store)
 	messagesHandler := handlers.NewMessagesHandler(store)
+	if drv != nil { messagesHandler.SetDeriver(drv) }
 	var brainHandler *handlers.BrainHandler
 	if brain != nil {
 		brainHandler = handlers.NewBrainHandler(brain, store)

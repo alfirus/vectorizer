@@ -8,7 +8,7 @@ import (
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
-// Dreamer periodically summarizes recent session context and stores as conclusions (768d).
+// Dreamer periodically summarizes recent session context and stores as conclusions (1536d, surprisal).
 type Dreamer struct {
 	store *store.Store
 	brain *llmbrain.Service
@@ -52,9 +52,14 @@ func (d *Dreamer) runOnce() {
 			for _, doc := range docs { if t,ok:=doc["document"].(string); ok && t!="" { parts=append(parts, t)}}
 			text:=strings.Join(parts, "\n")
 			if text=="" { continue }
+			// Surprisal: skip if recent summary already close to existing conclusions (cosine via 1536d query)
+			if existing, _ := d.store.QueryConclusions(ws, text[:min(500,len(text))], 1); len(existing)>0 {
+				if d, ok := existing[0]["distance"].(float32); ok && d < 0.15 { continue }
+			}
 			resp, err:=d.brain.Summarize(llmbrain.SummarizeRequest{Text: text, MaxChars: 500})
 			if err!=nil || resp.Summary=="" { continue }
 			_, _ = d.store.CreateConclusion(ws, "", resp.Summary, map[string]interface{}{"source":"dreamer","session_id":sid})
 		}
 	}
 }
+func min(a,b int) int { if a<b { return a }; return b }
