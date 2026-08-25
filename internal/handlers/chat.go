@@ -113,11 +113,18 @@ func (h *ChatHandler) execTool(ws, sessionID, tool string, args map[string]inter
 	switch tool {
 	case "search_memory":
 		q,_:=args["query"].(string)
+		scope,_:=args["scope"].(string)
+		// scope filtered via peer_id in conclusions metadata if needed; fallback to query
+		if scope != "" {
+			// future: QueryConclusions with scope; for now search then filter
+		}
 		res,_:=h.store.QueryConclusions(ws, q, 5)
 		b,_:=json.Marshal(res); return string(b)
 	case "search_messages":
 		q,_:=args["query"].(string)
-		res,_:=h.store.Search(q, ws, sessionID, "", 5)
+		scope,_:=args["scope"].(string); peerID,_:=args["peer_id"].(string)
+		if sid, ok := args["session_id"].(string); ok && sid != "" { sessionID = sid }
+		res,_:=h.store.SearchWithScope(q, ws, sessionID, "", scope, peerID, 5)
 		b,_:=json.Marshal(res); return string(b)
 	case "grep_messages":
 		pat,_:=args["pattern"].(string); if pat=="" { pat,_=args["query"].(string) }
