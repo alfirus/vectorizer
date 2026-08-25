@@ -248,14 +248,36 @@ The embedding model is configured via `EMBED_MODEL`. ChromaDB handles vector sto
 
 ## LLM Brain Modes
 
-### Disabled (default)
-Pure storage + search. Your agent brings its own LLM for synthesis/Q&A. Zero hidden costs.
+Toggle via `LLM_ENABLED` (`config/config.go:25`, `.env` `LLM_ENABLED=true|false`). All endpoints `POST /brain/*` + `POST /workspaces/:id/chat` + `deriver` + `dreamer` gate on this.
 
-### Enabled
-Vectorizer calls an external LLM for:
-- **Summarization** — condense long conversations into key facts
-- **Q&A** — answer questions about stored memories using retrieved context
-- **Agentic dialectic** — `AgentSystemPrompt` (observer/observed) + tool loop (`search_memory`, `grep`, `get_reasoning_chain`, etc.) for grounded answers
+### `LLM_ENABLED=false` — Disabled (default)
+
+**Pros**
+- **Zero hidden LLM cost** — only `qwen-embed` (1536d) at `POST /embeddings {"dimensions":1536}`; no `POST /chat/completions` calls, no per-token billing.
+- **Smaller resource footprint** — no `LLM_PROVIDER`/`LLM_MODEL` loaded; `dreamer` (`3h` surprisal) + `deriver` (`2s/5msg`) stay idle; Docker needs only `vectorizer` + `chromadb` + `qwen-embed` (or LM Studio), not an LLM container.
+- **Simpler ops** — no `LM_STUDIO_URL`/`OAI_COMPATIBLE_URL` for chat, no `LLM_API_KEY`, no `/brain` `503` handling; `go vet` + `docker compose up` with `LM Studio` alone passes.
+- **Deterministic** — `chat` returns `503` immediately; agent must do client-side synthesis, avoiding server-side hallucination.
+
+**Cons**
+- **No server-side synthesis** — `POST /brain/summarize`, `POST /brain/ask`, `POST /workspaces/:id/chat` (agentic dialectic) all `503`/`404`; agent must synthesize from `search` results itself.
+- **No async memory reasoning** — `deriver` (extract `1-3` facts → `ws_*_conclusions` + `ws_*_reasoning` edges) + `dreamer` (`3h` rolling-window) stay stopped; `ws_*_conclusions` only fills via manual `POST /conclusions`.
+- **No auto-continuity** — `chat` auto-store (`assistant` + `AddReasoningEdge`) disabled; `GET /sessions/:id/context?tokens` still works but `representation` stays shallow (only manually added conclusions).
+- **When to pick `false`:** `Vectorizer` as pure vector DB (`Phase 1+2`), agent brings its own `LLM` (e.g., `Claude`/`GPT-4o`) and does `search → inject → generate` itself; lowest cost, e.g., 3-agent `alpha/beta/gamma` with `LM Studio` GGUF `768d` fallback and no cloud LLM.
+
+### `LLM_ENABLED=true` — Enabled
+
+**Pros**
+- **Full reasoning maturity (Phase 3)** — `POST /workspaces/:id/chat` agentic loop (`maxTools` `0/2/4/6/8` per `reasoning_level`, `ChatWithHistory` + `AgentSystemPrompt` + 5 tools), `POST /brain/summarize` (auto-fetch `workspace_id`/`session_id` → `FitContextWithinTokens`), `POST /brain/ask` (RAG `Question+Context`).
+- **Async memory building** — `deriver` (`2s/5msg` batch → `Summarize Extract 1-3 facts → CreateConclusion + AddReasoningEdge`) + `dreamer` (`3h`, `8000` tokens `FitContextWithinTokens`, `distance<0.15` surprisal) continuously build `ws_*_conclusions`/`ws_*_reasoning` + `ws_*_peer_cards`, so future `chat` is grounded without manual conclusions.
+- **Streaming** — `GET /brain/summarize/stream` + `GET /workspaces/:id/chat/stream` SSE for long answers.
+- **Continuity** — `chat` auto-stores `answer` as `assistant` message + `conclusion{source:chat}` + `reasoning edge` (premise + supporting `chunk_ids`), so next rolling-window `GET /context?tokens=10000` includes it.
+- **gRPC parity** — `VectorizerService.Chat` delegates to same `brain` path as REST.
+
+**Cons**
+- **LLM cost/latency** — every `chat` = `1 + k` `POST /chat/completions` calls (`k` tool calls per `reasoning_level`); `dreamer` `3h` + `deriver` each add periodic `Summarize` calls. Budget `qwen3:8b` local (~`10GB` VRAM) or `gpt-4o-mini` cloud per-token; slower cold start.
+- **Provider dependency** — requires `LLM_PROVIDER=lm-studio|openai-compatible` + `LLM_MODEL` + `LM_STUDIO_URL`/`LLM_OAI_COMPATIBLE_URL` reachable; mis-configured returns `503 "brain disabled"` or `500 "chat failed"`.
+- **Ops overhead** — extra `LLM` container or cloud credentials; `docker-compose` `--profile gpu` not needed for LLM but `qwen-embed` already GPU-bound; combined VRAM `embed 4B (~9GB) + llm qwen3:8b (~10GB)` may exceed single GPU.
+- **When to pick `true`:** Need server-side agentic reasoning (`3-agent` `shared-proj` with `alpha/beta/gamma` strict `JWT p`, `proj-frontend` scopes, `reasoning graph` grounding), or want `zero-client-code` chat (`curl` → `answer` without agent-side LLM).
 
 The brain is completely optional and configurable per deployment.
 
