@@ -135,19 +135,21 @@ func rrfFusion(vector, bm25 []models.SearchResult, k int) []models.SearchResult 
 	return out
 }
 
-// Search performs semantic search across messages (vector + BM25 RRF when hybrid=true via query prefix).
+// Search performs semantic search across messages.
 func (s *Store) Search(query string, workspaceID string, sessionID string, role string, nResults int) ([]models.SearchResult, error) {
+	return s.SearchWithScope(query, workspaceID, sessionID, role, "", "", nResults)
+}
+
+func (s *Store) SearchWithScope(query string, workspaceID string, sessionID string, role string, scope string, peerID string, nResults int) ([]models.SearchResult, error) {
 	if nResults <= 0 {
 		nResults = 10
 	}
 
-	// Generate query embedding
 	queryEmbedding, err := s.embed.EmbedSingle(query)
 	if err != nil {
 		return nil, fmt.Errorf("generate query embedding: %w", err)
 	}
 
-	// Build where filter
 	whereFilter := map[string]interface{}{}
 	if workspaceID != "" {
 		whereFilter["workspace_id"] = workspaceID
@@ -157,6 +159,12 @@ func (s *Store) Search(query string, workspaceID string, sessionID string, role 
 	}
 	if role != "" {
 		whereFilter["role"] = role
+	}
+	if scope != "" {
+		whereFilter["scope"] = scope
+	}
+	if peerID != "" {
+		whereFilter["peer_id"] = peerID
 	}
 
 	var results []models.SearchResult
@@ -221,7 +229,10 @@ func (s *Store) Search(query string, workspaceID string, sessionID string, role 
 }
 
 func (s *Store) HybridSearch(query, workspaceID, sessionID, role string, nResults int) ([]models.SearchResult, error) {
-	vec, err := s.Search(query, workspaceID, sessionID, role, nResults*2)
+	return s.HybridSearchWithScope(query, workspaceID, sessionID, role, "", "", nResults)
+}
+func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string, scope string, peerID string, nResults int) ([]models.SearchResult, error) {
+	vec, err := s.SearchWithScope(query, workspaceID, sessionID, role, scope, peerID, nResults*2)
 	if err != nil { return nil, err }
 	// Build BM25 candidates by scanning workspace docs (may be large; limit)
 	wid := workspaceID

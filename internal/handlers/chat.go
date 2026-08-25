@@ -58,13 +58,18 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	temperature := map[string]float32{"none":0.1,"low":0.3,"medium":0.5,"high":0.7,"max":0.9}[level]
 	if temperature==0 { temperature=0.3 }
 
-	// Seed context via search_memory + representation (preflight)
+	// Seed context via search_memory + representation (preflight), scaled by reasoning_level
+	nResults := map[string]int{"none":1,"low":5,"medium":10,"high":15,"max":20}[level]
+	if nResults==0 { nResults=5 }
 	var seedCtx []string
 	if rep, _, _ := h.store.GetRepresentation(ws, observed, req.SessionID, 5); rep != "" {
 		seedCtx = append(seedCtx, "Representation:\n"+rep)
 	}
+	if results, err := h.store.Search(req.Query, ws, req.SessionID, "", nResults); err == nil {
+		for _, r := range results { seedCtx = append(seedCtx, r.Document) }
+	}
 	seedCtxStr := strings.Join(seedCtx, "\n\n")
-	if len(seedCtxStr) > 8000 { seedCtxStr = seedCtxStr[:8000] }
+	if len(seedCtxStr) > 12000 { seedCtxStr = seedCtxStr[:12000] }
 
 	// Build message history for agentic loop
 	messages := []map[string]interface{}{

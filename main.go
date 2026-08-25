@@ -96,10 +96,14 @@ func main() {
 		defer drv.Stop()
 	}
 
+	// Webhooks (created early so messages can fire)
+	whMgr := webhooks.New()
+
 	// Initialize handlers
 	workspacesHandler := handlers.NewWorkspacesHandler(store)
 	messagesHandler := handlers.NewMessagesHandler(store)
 	if drv != nil { messagesHandler.SetDeriver(drv) }
+	messagesHandler.SetWebhooks(whMgr)
 	var brainHandler *handlers.BrainHandler
 	if brain != nil {
 		brainHandler = handlers.NewBrainHandler(brain, store)
@@ -341,8 +345,7 @@ func main() {
 	api.Delete("/sessions/:id", func(c *fiber.Ctx) error { return c.Status(202).JSON(fiber.Map{"deleted":true}) })
 	api.Post("/sessions/:id/clone", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"cloned":true}) })
 
-	// Webhooks
-	whMgr := webhooks.New()
+	// Webhooks (handlers use existing whMgr)
 	whHandler := handlers.NewWebhooksHandler(whMgr)
 	api.Post("/webhooks", whHandler.Register)
 	api.Get("/webhooks", whHandler.List)
