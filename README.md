@@ -311,9 +311,9 @@ AI Agent (Hermes/OpenClaw/OpenCode/Claude) receives prompt
 1. **User sends prompt** → AI agent intercepts.
 2. **Recall:** Agent calls `vectorizer_search` or `vectorizer_chat` (or `POST /messages/search` + `GET /representations`) with `workspace_id` (agent identity), `session_id` (thread), optional `scope`/`hybrid`/`temporal`. Vectorizer embeds query 1536d (Qwen3-Embedding-4B MRL), HNSW cosine search (plus BM25 RRF if requested), merges peer cards/conclusions.
 3. **Inject:** Agent prepends returned memories as context to its LLM.
-4. **Generate:** LLM produces final answer grounded in memories (with observer/observed perspective if dialectic).
-5. **Record:** Agent stores both user prompt and its answer via `vectorizer_add_message` / `POST /messages`; Vectorizer chunks, embeds, upserts.
-6. **Background:** Dreamer, TTL, webhooks run offline; future recalls benefit.
+4. **Generate:** LLM produces final answer grounded in memories (with observer/observed perspective if dialectic, `reasoning_level` `n_results` scaling).
+5. **Record:** Agent stores both user prompt and its answer via `vectorizer_add_message` / `POST /messages`; Vectorizer chunks, embeds `1536d`, upserts `ws_<id>`, enqueues deriver (`2s/5msg` → conclusions), fires `webhooks`. `POST /workspaces/:id/chat` also **auto-stores** answer as `ws_<id>_conclusions` + `ws_<id>_reasoning` edge + `assistant` message for rolling-window continuity.
+6. **Background:** Dreamer (`3h`, rolling-window `8000` tokens via `FitContextWithinTokens`), TTL, webhooks run offline; `GET /sessions/:id/context?tokens=10000` enforces budget via `EstimateTokens`.
 7. **Fallback:** If `VECTORIZER_URL` down, agent proceeds without memory (graceful degradation); if `X-API-Key`/JWT missing, `401`; metrics at `/metrics`, health at `/api/v1/health` (public).
 
 This mirrors the `Store → Reason (deriver) → Query (chat/representation) → Inject` loop, single-binary Go/Chroma.

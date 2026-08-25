@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/alfirus/vectorizer/internal/llmbrain"
+	"github.com/alfirus/vectorizer/internal/models"
 	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/store"
 )
@@ -78,21 +79,47 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	}
 
 	answer := ""
+	var premiseIDs, supportingMsgIDs []string
 	for iter := 0; iter <= maxTools; iter++ {
 		resp, err := h.brain.ChatWithHistory(messages, temperature)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "chat failed: "+err.Error()})
 		}
-		// Check for tool call JSON
 		toolName, toolArgs := parseToolCall(resp)
 		if toolName == "" || iter == maxTools {
 			answer = resp
 			break
 		}
-		// Execute tool
 		toolResult := h.execTool(ws, req.SessionID, toolName, toolArgs)
+		// Collect premises for reasoning graph
+		if toolName == "search_memory" {
+			// Try to extract ids from tool result
+			var tmp []map[string]interface{}
+			_ = json.Unmarshal([]byte(toolResult), &tmp)
+			for _, m := range tmp { if id, ok := m["id"].(string); ok { premiseIDs = append(premiseIDs, id) } }
+		}
+		if toolName == "search_messages" {
+			var tmp []map[string]interface{}
+			_ = json.Unmarshal([]byte(toolResult), &tmp)
+			// store handles SearchResult id -> capture chunk ids
+			for _, m := range tmp {
+				if id, ok := m["ID"].(string); ok { supportingMsgIDs = append(supportingMsgIDs, id) }
+				if id, ok := m["id"].(string); ok { supportingMsgIDs = append(supportingMsgIDs, id) }
+			}
+		}
 		messages = append(messages, map[string]interface{}{"role": "assistant", "content": resp})
 		messages = append(messages, map[string]interface{}{"role": "user", "content": fmt.Sprintf("Tool %s result:\n%s\n\nContinue or answer.", toolName, toolResult)})
+	}
+	// Auto-store chat answer into reasoning graph + assistant message (rolling-window)
+	if answer != "" && req.SessionID != "" {
+		// Persist as conclusion for reasoning grounding
+		newID, _ := h.store.CreateConclusion(ws, observed, answer, map[string]interface{}{"source":"chat","observer":observer,"session_id":req.SessionID})
+		if newID != "" {
+			_ = h.store.AddReasoningEdge(ws, observed, newID, premiseIDs, supportingMsgIDs)
+		}
+		// Also store as assistant message so next rolling window includes it
+		msg := models.NewMessage(ws, req.SessionID, "assistant", answer)
+		_ = h.store.AddMessage(msg, answer)
 	}
 	return c.JSON(fiber.Map{"answer": answer, "observer": observer, "observed": observed})
 }

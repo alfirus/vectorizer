@@ -733,11 +733,13 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 
 ### Phase 3: Brain Integration — done (agentic)
 - [x] Auto-fetch for brain endpoints + `POST /workspaces/:id/chat` (observer/observed, `AgentSystemPrompt`)
-- [x] Agentic dialectic loop: `5` tools (`search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`) via `ChatWithHistory`, `maxTools` per `reasoning_level` (`none=0, low=2, medium=4, high=6, max=8`)
+- [x] Agentic dialectic loop: `5` tools (`search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`) via `ChatWithHistory`, `maxTools` per `reasoning_level` (`none=0, low=2, medium=4, high=6, max=8`), `nResults` scaling `1/5/10/15/20`
 - [x] Streaming responses (SSE `GET /brain/summarize/stream`, `GET /workspaces/:id/chat/stream`)
-- [x] Conversation history summarization (surprisal dreamer `3h`, `distance<0.15` skip)
-- [x] Deriver (`internal/deriver`, `2s/5msg` batch → `Summarize Extract 1-3 facts → CreateConclusion + AddReasoningEdge`)
-- [x] Reasoning graph (`ws_<id>_reasoning`, `GetReasoningChain` BFS, `GetObservationContext` window)
+- [x] Conversation history summarization (surprisal dreamer `3h`, `distance<0.15` skip, rolling-window `8000` tokens via `FitContextWithinTokens`)
+- [x] Deriver (`internal/deriver`, `2s/5msg` batch → `Summarize Extract 1-3 facts → CreateConclusion + AddReasoningEdge`, enqueued via `POST /messages`)
+- [x] Reasoning graph (`ws_<id>_reasoning`, `GetReasoningChain` BFS, `GetObservationContext` window `±2`)
+- [x] Rolling-window `tokens` budgeting (`EstimateTokens ~4 chars/token`, `FitContextWithinTokens` newest-first, `GET /workspaces/:id/sessions/:sid/context?tokens=10000` → `tokens_used`/`tokens_budget`)
+- [x] Auto-store chat answer into reasoning graph + assistant message (`CreateConclusion{source:chat}` + `AddReasoningEdge(premiseIDs, supportingMsgIDs)` + `AddMessage assistant` for continuity)
 
 ### Phase 4: Scale & Reliability — done
 - [x] Health check with ChromaDB `Heartbeat` (degraded if down, `version 0.3.0`)

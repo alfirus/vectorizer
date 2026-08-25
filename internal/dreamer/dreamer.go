@@ -39,6 +39,8 @@ func (d *Dreamer) Stop(){ close(d.stop) }
 func (d *Dreamer) RunOnce(){ d.runOnce() }
 
 func (d *Dreamer) runOnce() {
+	// Rolling-window tokens budgeting (default 8000 tokens ~ 32000 chars)
+	const budget = 8000
 	workspaces, _ := d.store.ListWorkspaces()
 	for _, ws := range workspaces {
 		sessions, _ := d.store.ListSessions(ws)
@@ -46,15 +48,17 @@ func (d *Dreamer) runOnce() {
 			m, _ := sess["metadata"].(map[string]interface{})
 			sid, _ := m["session_id"].(string)
 			if sid=="" { continue }
-			docs, _ := d.store.GetMessages(ws, sid, 20, 0)
+			docs, _ := d.store.GetMessages(ws, sid, 50, 0)
 			if len(docs)<3 { continue }
+			rep, _, _ := d.store.GetRepresentation(ws, "", sid, 5)
+			docs, rep = store.FitContextWithinTokens(docs, rep, budget)
 			var parts []string
+			if rep != "" { parts = append(parts, rep) }
 			for _, doc := range docs { if t,ok:=doc["document"].(string); ok && t!="" { parts=append(parts, t)}}
 			text:=strings.Join(parts, "\n")
 			if text=="" { continue }
-			// Surprisal: skip if recent summary already close to existing conclusions (cosine via 1536d query)
 			if existing, _ := d.store.QueryConclusions(ws, text[:min(500,len(text))], 1); len(existing)>0 {
-				if d, ok := existing[0]["distance"].(float32); ok && d < 0.15 { continue }
+				if d2, ok := existing[0]["distance"].(float32); ok && d2 < 0.15 { continue }
 			}
 			resp, err:=d.brain.Summarize(llmbrain.SummarizeRequest{Text: text, MaxChars: 500})
 			if err!=nil || resp.Summary=="" { continue }

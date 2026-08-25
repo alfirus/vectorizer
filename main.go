@@ -330,14 +330,17 @@ func main() {
 	api.Delete("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"deleted": true}) })
 	api.Get("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"id": c.Params("id")}) })
 
-	// Session context (session context)
+	// Session context with rolling-window tokens budgeting
 	api.Get("/workspaces/:workspace_id/sessions/:session_id/context", func(c *fiber.Ctx) error {
 		ws:=c.Params("workspace_id"); sid:=c.Params("session_id")
-		tokens:=c.Query("tokens", "10000")
-		_ = tokens
-		docs,_:=store.GetMessages(ws, sid, 50, 0)
+		budget, _ := parseTokens(c.Query("tokens", "10000"))
+		docs,_:=store.GetMessages(ws, sid, 100, 0)
 		text, _, _:=store.GetRepresentation(ws, "", sid, 25)
-		return c.JSON(fiber.Map{"messages": docs, "representation": text, "tokens": tokens})
+		docs, text = store.FitContextWithinTokens(docs, text, budget)
+		used := 0
+		for _, d := range docs { if doc, ok := d["document"].(string); ok { used += store.EstimateTokens(doc) } }
+		used += store.EstimateTokens(text)
+		return c.JSON(fiber.Map{"messages": docs, "representation": text, "tokens_used": used, "tokens_budget": budget})
 	})
 
 	// Sessions missing CRUD
@@ -403,4 +406,13 @@ func (r *rateLimiter) Allow(key string) bool {
 
 func isHealthOrMetrics(path string) bool {
 	return path == "/api/v1/health" || path == "/api/v1/metrics" || path == "/health"
+}
+func parseTokens(s string) (int, error) {
+	if v, err := parseInt(s); err == nil { return v, nil }
+	return 10000, nil
+}
+func parseInt(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }
