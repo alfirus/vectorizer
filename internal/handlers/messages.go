@@ -35,7 +35,8 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 		Role        string `json:"role"`
 		Content     string `json:"content"`
 		Scope       string `json:"scope,omitempty"`
-		PeerID      string `json:"peer_id,omitempty"`
+		PeerID      string                 `json:"peer_id,omitempty"`
+		Metadata    map[string]interface{} `json:"metadata,omitempty"`
 	}
 	if err := c.BodyParser(&req); err != nil { return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"}) }
 	if req.WorkspaceID == "" || req.SessionID == "" || req.Role == "" || req.Content == "" {
@@ -59,10 +60,11 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	}
 
 	msg := models.NewMessage(req.WorkspaceID, req.SessionID, req.Role, req.Content)
-	if req.Scope != "" || req.PeerID != "" {
+	if req.Scope != "" || req.PeerID != "" || len(req.Metadata) > 0 {
 		msg.Metadata = map[string]interface{}{}
 		if req.Scope != "" { msg.Metadata["scope"] = req.Scope }
 		if req.PeerID != "" { msg.Metadata["peer_id"] = req.PeerID }
+		for k, v := range req.Metadata { msg.Metadata[k] = v }
 	}
 	if len(msg.Content) > 100000 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content too large (max 100k chars)"})
@@ -89,12 +91,13 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 	var req struct {
 		WorkspaceID string `json:"workspace_id"`
 		Messages []struct {
-			WorkspaceID string `json:"workspace_id"`
-			SessionID string `json:"session_id"`
-			Role      string `json:"role"`
-			Content   string `json:"content"`
-			Scope     string `json:"scope,omitempty"`
-			PeerID    string `json:"peer_id,omitempty"`
+			WorkspaceID string                 `json:"workspace_id"`
+			SessionID string                 `json:"session_id"`
+			Role      string                 `json:"role"`
+			Content   string                 `json:"content"`
+			Scope     string                 `json:"scope,omitempty"`
+			PeerID    string                 `json:"peer_id,omitempty"`
+			Metadata  map[string]interface{} `json:"metadata,omitempty"`
 		} `json:"messages"`
 	}
 	if err := c.BodyParser(&req); err != nil {
@@ -139,12 +142,16 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 		sessionID := msg.SessionID
 
 		m := models.NewMessage(wsID, sessionID, msg.Role, models.SanitizeString(msg.Content))
-		if msg.Scope != "" || msg.PeerID != "" {
+		if msg.Scope != "" || msg.PeerID != "" || len(msg.Metadata) > 0 {
 			m.Metadata = map[string]interface{}{}
 			if msg.Scope != "" { m.Metadata["scope"] = msg.Scope }
 			if msg.PeerID != "" { m.Metadata["peer_id"] = msg.PeerID }
+			for k, v := range msg.Metadata {
+				if k == "scope" || k == "peer_id" { continue }
+				m.Metadata[k] = v
+			}
 		}
-		if err := h.store.AddMessage(m, m.Content); err != nil {
+		if err := h.store.AddMessage(m, msg.Content); err != nil {
 			results = append(results, fiber.Map{
 				"session_id": sessionID,
 				"role":       msg.Role,

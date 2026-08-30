@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // Service handles optional LLM-powered summarization and Q&A per agent.
@@ -21,7 +22,7 @@ func New(baseURL, apiKey, model string) *Service {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		model:   model,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 12 * time.Second},
 	}
 }
 

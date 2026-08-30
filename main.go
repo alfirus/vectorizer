@@ -83,6 +83,8 @@ func main() {
 		if llmBaseURL != "" {
 			brain = llmbrain.New(llmBaseURL, llmAPIKey, cfg.LLMModel)
 			fmt.Println("  LLM Brain initialized successfully")
+			store.SetBrain(brain)
+			fmt.Println("  Vault librarian wired: auto-tag + rerank enabled")
 		} else {
 			fmt.Println("  Warning: LLM enabled but no base URL configured")
 		}

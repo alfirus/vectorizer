@@ -16,6 +16,8 @@ services:
       OAI_COMPATIBLE_URL: ${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}
       LM_STUDIO_URL: ${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    volumes:
+      - "C:/Users/alfir/SynologyDrive/ai:/data/ai:ro"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -23,7 +25,7 @@ services:
         condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-8091}/api/v1/health"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/api/v1/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

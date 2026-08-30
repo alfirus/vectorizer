@@ -217,13 +217,18 @@ func (c *Client) ListCollections() ([]Collection, error) {
 }
 
 // Count returns the number of documents in a collection.
+// Chroma 1.0.0 v2 returns raw number (e.g. 42) not {"count":42} — handle both.
 func (c *Client) Count(collectionID string) (int, error) {
 	url := c.collectionsBase() + "/" + collectionID + "/count"
 	resp, err := c.doJSON(http.MethodGet, url, nil)
 	if err != nil {
 		return 0, fmt.Errorf("count documents in collection %s: %w", collectionID, err)
 	}
-
+	// Try raw number first (Chroma 1.0.0)
+	var raw int
+	if err := json.Unmarshal(resp, &raw); err == nil {
+		return raw, nil
+	}
 	var result struct {
 		Count int `json:"count"`
 	}

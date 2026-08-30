@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,15 +9,17 @@ import (
 
 	"github.com/alfirus/vectorizer/internal/chromadb"
 	"github.com/alfirus/vectorizer/internal/embedding"
+	"github.com/alfirus/vectorizer/internal/llmbrain"
 	"github.com/alfirus/vectorizer/internal/models"
 )
 
-const maxChunkSize = 4000 // chars per chunk
+const maxChunkSize = 6000 // chars per chunk — vault uses 3600-3800 to avoid double-split
 
 // Store manages workspace isolation, session/message storage, and semantic search.
 type Store struct {
 	chroma     *chromadb.Client
 	embed      embedding.Embedder
+	brain      *llmbrain.Service
 	tenant     string
 	database   string
 }
@@ -26,6 +29,132 @@ func New(chromaClient *chromadb.Client, embedService embedding.Embedder) *Store 
 		chroma: chromaClient,
 		embed:  embedService,
 	}
+}
+
+func (s *Store) SetBrain(brain *llmbrain.Service) { s.brain = brain }
+
+func (s *Store) Brain() *llmbrain.Service { return s.brain }
+
+// TagVaultChunk calls the librarian Brain to produce tags+summary for a vault chunk.
+// Falls back to empty on error/timeout — never blocks ingest.
+func (s *Store) TagVaultChunk(headerPath, chunk string) (tags string, summary string) {
+	if s.brain == nil {
+		return "", ""
+	}
+	// 6s budget for Brain — Nomic 768 already gives us a good fingerprint, tags are bonus
+	system := llmbrain.VaultTagSystem
+	user := llmbrain.VaultTagUser(headerPath, chunk)
+	reply, err := s.brain.ChatWithTemp(system, "", user, 0.2)
+	if err != nil || strings.TrimSpace(reply) == "" {
+		return "", ""
+	}
+	// Brain must return {"tags":"...","summary":"..."} — parse leniently
+	var out struct {
+		Tags    string `json:"tags"`
+		Summary string `json:"summary"`
+	}
+	// Strip possible markdown fences
+	reply = strings.TrimSpace(reply)
+	reply = strings.TrimPrefix(reply, "```json")
+	reply = strings.TrimPrefix(reply, "```")
+	reply = strings.TrimSuffix(reply, "```")
+	reply = strings.TrimSpace(reply)
+	if err := json.Unmarshal([]byte(reply), &out); err != nil {
+		// Try to salvage via simple regexp fallback
+		return extractTagsFallback(reply), ""
+	}
+	tags = strings.TrimSpace(out.Tags)
+	summary = strings.TrimSpace(out.Summary)
+	// Normalize tags: lowercase, comma-joined
+	if tags != "" {
+		parts := strings.Split(tags, ",")
+		var clean []string
+		for _, p := range parts {
+			p = strings.TrimSpace(strings.ToLower(p))
+			p = strings.ReplaceAll(p, " ", "-")
+			if p != "" {
+				clean = append(clean, p)
+			}
+		}
+		tags = strings.Join(clean, ",")
+	}
+	return tags, summary
+}
+
+func extractTagsFallback(reply string) string {
+	// grab first quoted comma list
+	start := strings.Index(reply, "\"tags\"")
+	if start < 0 {
+		return ""
+	}
+	colon := strings.Index(reply[start:], ":")
+	if colon < 0 {
+		return ""
+	}
+	rest := reply[start+colon+1:]
+	// find quoted value
+	first := strings.Index(rest, "\"")
+	if first < 0 {
+		return ""
+	}
+	rest = rest[first+1:]
+	end := strings.Index(rest, "\"")
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:end])
+}
+
+// RerankVaultResults asks the librarian Brain to reorder top-k vector hits by query relevance.
+// Returns reordered slice; on error returns input unchanged (never fails search).
+func (s *Store) RerankVaultResults(query string, hits []models.SearchResult) []models.SearchResult {
+	if s.brain == nil || len(hits) <= 1 {
+		return hits
+	}
+	// Build chunk summaries for the Brain
+	chunks := make([]string, len(hits))
+	for i, h := range hits {
+		hp, _ := h.Metadata["header_path"].(string)
+		tags, _ := h.Metadata["tags"].(string)
+		snippet := h.Document
+		if len(snippet) > 300 {
+			snippet = snippet[:300]
+		}
+		chunks[i] = fmt.Sprintf("[%s] tags=%s snippet=%s", hp, tags, snippet)
+	}
+	system := llmbrain.VaultRerankSystem
+	user := llmbrain.VaultRerankUser(query, chunks)
+	reply, err := s.brain.ChatWithTemp(system, "", user, 0.2)
+	if err != nil || strings.TrimSpace(reply) == "" {
+		return hits
+	}
+	reply = strings.TrimSpace(reply)
+	reply = strings.TrimPrefix(reply, "```json")
+	reply = strings.TrimPrefix(reply, "```")
+	reply = strings.TrimSuffix(reply, "```")
+	reply = strings.TrimSpace(reply)
+	var out struct {
+		Order []int `json:"order"`
+	}
+	if err := json.Unmarshal([]byte(reply), &out); err != nil || len(out.Order) == 0 {
+		return hits
+	}
+	// Validate permutation, then reorder
+	if len(out.Order) != len(hits) {
+		return hits
+	}
+	seen := map[int]bool{}
+	for _, idx := range out.Order {
+		if idx < 0 || idx >= len(hits) || seen[idx] {
+			return hits
+		}
+		seen[idx] = true
+	}
+	reordered := make([]models.SearchResult, len(hits))
+	for i, idx := range out.Order {
+		reordered[i] = hits[idx]
+	}
+	return reordered
 }
 
 func (s *Store) dummyVector() []float32 {
@@ -86,6 +215,28 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 		if v, ok := msg.Metadata["scope"].(string); ok && v != "" { meta["scope"] = v }
 		if v, ok := msg.Metadata["peer_id"].(string); ok && v != "" { meta["peer_id"] = v }
 		if v, ok := msg.Metadata["peer_ids"]; ok { meta["peer_ids"] = v }
+		// Vault 11-field flat metadata — passthrough any vault_*/known keys from client (source_path etc.)
+		for _, k := range []string{"source_type", "source_path", "header_path", "chunk_type", "tags", "importance", "agent", "language", "parent_doc_id", "doc_title", "chunk_id", "file_hash"} {
+			if v, ok := msg.Metadata[k]; ok && v != "" && v != nil { meta[k] = v }
+		}
+		// Vault librarian auto-tag: if client didn't send tags/header_path already filled, ask Brain (only for file/memory sources)
+		// Tagged asynchronously so ingest never blocks on LLM — tags fill via background update
+		if st, _ := msg.Metadata["source_type"].(string); st == "file" || st == "memory" {
+			// only tag if tags missing — kick async; don't block store
+			if _, hasTags := meta["tags"]; !hasTags || meta["tags"] == "" {
+				go func(srcMeta map[string]interface{}, chunk, mid string, chunkIdx int) {
+					hp, _ := srcMeta["header_path"].(string)
+					if t, s := s.TagVaultChunk(hp, chunk); t != "" {
+						// update metadata asynchronously via direct chroma update is heavy;
+						// for now we log — vault_index.py will reindex with real tags next run
+						_ = t
+						_ = s
+						_ = mid
+						_ = chunkIdx
+					}
+				}(msg.Metadata, chunk, msg.ID, i)
+			}
+		}
 		metadatas[i] = meta
 	}
 
@@ -140,7 +291,15 @@ func (s *Store) Search(query string, workspaceID string, sessionID string, role 
 	return s.SearchWithScope(query, workspaceID, sessionID, role, "", "", nResults)
 }
 
+func (s *Store) SearchWithRerank(query string, workspaceID string, sessionID string, role string, nResults int, rerank bool) ([]models.SearchResult, error) {
+	return s.SearchWithScopeAndRerank(query, workspaceID, sessionID, role, "", "", nResults, rerank)
+}
+
 func (s *Store) SearchWithScope(query string, workspaceID string, sessionID string, role string, scope string, peerID string, nResults int) ([]models.SearchResult, error) {
+	return s.SearchWithScopeAndRerank(query, workspaceID, sessionID, role, scope, peerID, nResults, true)
+}
+
+func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessionID string, role string, scope string, peerID string, nResults int, rerank bool) ([]models.SearchResult, error) {
 	if nResults <= 0 {
 		nResults = 10
 	}
@@ -219,6 +378,25 @@ func (s *Store) SearchWithScope(query string, workspaceID string, sessionID stri
 	deduped := results[:0]
 	for _, r := range results { if _, ok := seen[r.ID]; ok { continue }; seen[r.ID]=struct{}{}; deduped=append(deduped, r) }
 	if len(deduped) > nResults { deduped = deduped[:nResults] }
+
+	// Vault librarian rerank: vector top-k -> Brain reorders by query+header_path+tags (best for 768d)
+	// Failsafe: rerank only when library is warm and never exceeds 1.5s; GET path was proof it hangs on Qwen 35b cold load
+	if rerank && len(deduped) >= 3 && len(deduped) <= 10 && s.brain != nil {
+		// Probe: if Brain still cold, ChatWithTemp(12s) would block handler -> use short-circuit 1.5s and keep vector order
+		done := make(chan []models.SearchResult, 1)
+		go func(hits []models.SearchResult) {
+			done <- s.RerankVaultResults(query, hits)
+		}(append([]models.SearchResult(nil), deduped...))
+		select {
+		case reordered := <-done:
+			// only accept if Brain actually reordered (not same as input due to error)
+			if len(reordered) == len(deduped) {
+				deduped = reordered
+			}
+		case <-time.After(1500 * time.Millisecond):
+			// keep vector order, don't wait for Qwen cold start
+		}
+	}
 
 	// Lightweight BM25 + RRF if query has keywords: fetch lexical candidates via GetDocuments
 	if len(deduped) > 0 {

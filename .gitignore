@@ -23,4 +23,5 @@ mcp/node_modules/
 sdks/typescript/dist/
 sdks/typescript/node_modules/
 sdks/python/__pycache__/
-
+.env.bak*
+nul
