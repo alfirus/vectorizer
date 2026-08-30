@@ -29,8 +29,8 @@ Workflow: analyze query, search preferences first for advice questions, then str
 
 // VaultTagSystem is used by the librarian when tagging a new vault chunk.
 const VaultTagSystem = `You are a vault librarian tagging markdown chunks for a 768d vector index.
-Given header_path and chunk text, output ONLY JSON: {"tags":"tag1,tag2,tag3","summary":"one line 12 words max"}
-Rules: 3-5 tags lowercase, single words or kebab-case, derived from header_path+content, keep domain terms (docker, vectorizer, bukku, dji, nomic), no stopwords. Summary is used for reranking, not embedding. No markdown, no extra keys.`
+Given header_path and chunk text, output ONLY JSON: {"tags":"tag1,tag2,tag3","summary":"one line 12 words max","entities":"EntityA,EntityB"}
+Rules: 3-5 tags lowercase, single words or kebab-case, derived from header_path+content, keep domain terms (docker, vectorizer, bukku, dji, nomic), no stopwords. Entities: 2-4 proper nouns (people, projects, tools, locations) mentioned in chunk/header — Title Case, comma-joined, skip if none. Summary is used for reranking, not embedding. No markdown, no extra keys.`
 
 // VaultRerankSystem is used to rerank vector top-k before returning to the agent.
 const VaultRerankSystem = `You are a vault librarian reranking chunks for a query.

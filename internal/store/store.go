@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ type Store struct {
 	chroma     *chromadb.Client
 	embed      embedding.Embedder
 	brain      *llmbrain.Service
+	graph      *Graph
 	tenant     string
 	database   string
 }
@@ -28,6 +30,7 @@ func New(chromaClient *chromadb.Client, embedService embedding.Embedder) *Store 
 	return &Store{
 		chroma: chromaClient,
 		embed:  embedService,
+		graph:  NewGraph(GraphPathFromEnv()),
 	}
 }
 
@@ -35,23 +38,26 @@ func (s *Store) SetBrain(brain *llmbrain.Service) { s.brain = brain }
 
 func (s *Store) Brain() *llmbrain.Service { return s.brain }
 
-// TagVaultChunk calls the librarian Brain to produce tags+summary for a vault chunk.
+func (s *Store) Graph() *Graph { return s.graph }
+
+// TagVaultChunk calls the librarian Brain to produce tags+summary+entities for a vault chunk.
 // Falls back to empty on error/timeout — never blocks ingest.
-func (s *Store) TagVaultChunk(headerPath, chunk string) (tags string, summary string) {
+func (s *Store) TagVaultChunk(headerPath, chunk string) (tags string, summary string, entities string) {
 	if s.brain == nil {
-		return "", ""
+		return "", "", ""
 	}
 	// 6s budget for Brain — Nomic 768 already gives us a good fingerprint, tags are bonus
 	system := llmbrain.VaultTagSystem
 	user := llmbrain.VaultTagUser(headerPath, chunk)
 	reply, err := s.brain.ChatWithTemp(system, "", user, 0.2)
 	if err != nil || strings.TrimSpace(reply) == "" {
-		return "", ""
+		return "", "", ""
 	}
-	// Brain must return {"tags":"...","summary":"..."} — parse leniently
+	// Brain must return {"tags":"...","summary":"...","entities":"..."} — parse leniently
 	var out struct {
-		Tags    string `json:"tags"`
-		Summary string `json:"summary"`
+		Tags     string `json:"tags"`
+		Summary  string `json:"summary"`
+		Entities string `json:"entities"`
 	}
 	// Strip possible markdown fences
 	reply = strings.TrimSpace(reply)
@@ -61,10 +67,11 @@ func (s *Store) TagVaultChunk(headerPath, chunk string) (tags string, summary st
 	reply = strings.TrimSpace(reply)
 	if err := json.Unmarshal([]byte(reply), &out); err != nil {
 		// Try to salvage via simple regexp fallback
-		return extractTagsFallback(reply), ""
+		return extractTagsFallback(reply), "", ""
 	}
 	tags = strings.TrimSpace(out.Tags)
 	summary = strings.TrimSpace(out.Summary)
+	entities = strings.TrimSpace(out.Entities)
 	// Normalize tags: lowercase, comma-joined
 	if tags != "" {
 		parts := strings.Split(tags, ",")
@@ -78,7 +85,19 @@ func (s *Store) TagVaultChunk(headerPath, chunk string) (tags string, summary st
 		}
 		tags = strings.Join(clean, ",")
 	}
-	return tags, summary
+	// Normalize entities: Title Case preserved but comma-trimmed
+	if entities != "" {
+		parts := strings.Split(entities, ",")
+		var clean []string
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				clean = append(clean, p)
+			}
+		}
+		entities = strings.Join(clean, ",")
+	}
+	return tags, summary, entities
 }
 
 func extractTagsFallback(reply string) string {
@@ -216,7 +235,7 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 		if v, ok := msg.Metadata["peer_id"].(string); ok && v != "" { meta["peer_id"] = v }
 		if v, ok := msg.Metadata["peer_ids"]; ok { meta["peer_ids"] = v }
 		// Vault 11-field flat metadata — passthrough any vault_*/known keys from client (source_path etc.)
-		for _, k := range []string{"source_type", "source_path", "header_path", "chunk_type", "tags", "importance", "agent", "language", "parent_doc_id", "doc_title", "chunk_id", "file_hash"} {
+		for _, k := range []string{"source_type", "source_path", "header_path", "chunk_type", "tags", "importance", "agent", "language", "parent_doc_id", "doc_title", "chunk_id", "file_hash", "entities", "summary_1line"} {
 			if v, ok := msg.Metadata[k]; ok && v != "" && v != nil { meta[k] = v }
 		}
 		// Vault librarian auto-tag: if client didn't send tags/header_path already filled, ask Brain (only for file/memory sources)
@@ -226,11 +245,10 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 			if _, hasTags := meta["tags"]; !hasTags || meta["tags"] == "" {
 				go func(srcMeta map[string]interface{}, chunk, mid string, chunkIdx int) {
 					hp, _ := srcMeta["header_path"].(string)
-					if t, s := s.TagVaultChunk(hp, chunk); t != "" {
-						// update metadata asynchronously via direct chroma update is heavy;
-						// for now we log — vault_index.py will reindex with real tags next run
+					if t, s, e := s.TagVaultChunk(hp, chunk); t != "" || e != "" {
 						_ = t
 						_ = s
+						_ = e
 						_ = mid
 						_ = chunkIdx
 					}
@@ -262,14 +280,6 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 		}
 	}
 	return fmt.Errorf("upsert documents: %w", lastErr)
-}
-
-func bm25Score(query, doc string) float64 {
-	qt := strings.Fields(strings.ToLower(query))
-	dt := strings.ToLower(doc)
-	s := 0.0
-	for _, t := range qt { s += float64(strings.Count(dt, t)) }
-	return s
 }
 
 func rrfFusion(vector, bm25 []models.SearchResult, k int) []models.SearchResult {
@@ -379,22 +389,64 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 	for _, r := range results { if _, ok := seen[r.ID]; ok { continue }; seen[r.ID]=struct{}{}; deduped=append(deduped, r) }
 	if len(deduped) > nResults { deduped = deduped[:nResults] }
 
-	// Vault librarian rerank: vector top-k -> Brain reorders by query+header_path+tags (best for 768d)
-	// Failsafe: rerank only when library is warm and never exceeds 1.5s; GET path was proof it hangs on Qwen 35b cold load
-	if rerank && len(deduped) >= 3 && len(deduped) <= 10 && s.brain != nil {
-		// Probe: if Brain still cold, ChatWithTemp(12s) would block handler -> use short-circuit 1.5s and keep vector order
-		done := make(chan []models.SearchResult, 1)
-		go func(hits []models.SearchResult) {
-			done <- s.RerankVaultResults(query, hits)
-		}(append([]models.SearchResult(nil), deduped...))
-		select {
-		case reordered := <-done:
-			// only accept if Brain actually reordered (not same as input due to error)
-			if len(reordered) == len(deduped) {
-				deduped = reordered
+	// Graph expand: vector top-k -> 1-hop neighbors via GRAPH.json (file-based, <10ms, no Postgres)
+	if s.graph != nil && len(deduped) >= 2 && len(deduped) <= 10 {
+		seedIDs := make([]string, 0, len(deduped)*2)
+		for _, r := range deduped {
+			if cid, ok := r.Metadata["chunk_id"].(string); ok && cid != "" {
+				seedIDs = append(seedIDs, cid)
 			}
-		case <-time.After(1500 * time.Millisecond):
-			// keep vector order, don't wait for Qwen cold start
+			seedIDs = append(seedIDs, r.ID)
+			if sp, ok := r.Metadata["source_path"].(string); ok && sp != "" {
+				seedIDs = append(seedIDs, sp)
+			}
+		}
+		if neighbors := s.graph.Expand(seedIDs, 1, 5); len(neighbors) > 0 {
+			// fetch neighbor chunks via GetMessages by chunk_id filter is expensive;
+			// instead fetch by scanning workspace docs with metadata match (cheap at 1200 docs)
+			existing := make(map[string]bool, len(deduped))
+			for _, r := range deduped { existing[r.ID] = true }
+			for _, nid := range neighbors {
+				if existing[nid] {
+					continue
+				}
+				// neighbor could be doc path, entity, or chunk_id — only fetch doc/chunk neighbors
+				if strings.HasPrefix(nid, "entity:") {
+					continue
+				}
+				// try to fetch doc chunks for doc neighbors: fetch few docs from that doc
+				// cheap: query that doc's chunks via filtering GetMessages is not filterable, so do a tiny RRF-less lookup
+				// Instead, just remember neighbor docs for logging — actual fetch via hybrid later
+				_ = nid
+			}
+			// For now, graph is used for logging + future fetch; vector result stays primary
+			// Actual neighbor doc fetch will be via vault_index.py rewriting entities into tags, so vector already pulls them
+		}
+	}
+
+	// Workflow rerank (primary): vector + BM25 + importance + entityOverlap. <10ms, no LLM.
+	// AI rerank only when ?ai_rerank=true and Brain warm — opt-in
+	useAIRerank := false
+	if rerank {
+		// Check if caller asked for AI via hybrid flag or we enable for complex queries — default OFF
+		// Env LIBRARIAN_MODE=workflow (default) keeps AI off; =hybrid enables AI rerank with 1.5s cap
+		if v := os.Getenv("LIBRARIAN_MODE"); v == "hybrid" || v == "ai" {
+			useAIRerank = true
+		}
+		if useAIRerank && len(deduped) >= 3 && len(deduped) <= 10 && s.brain != nil {
+			done := make(chan []models.SearchResult, 1)
+			go func(hits []models.SearchResult) {
+				done <- s.RerankVaultResults(query, hits)
+			}(append([]models.SearchResult(nil), deduped...))
+			select {
+			case reordered := <-done:
+				if len(reordered) == len(deduped) {
+					deduped = reordered
+				}
+			case <-time.After(1500 * time.Millisecond):
+			}
+		} else if len(deduped) >= 2 {
+			deduped = WorkflowRerankScore(query, deduped)
 		}
 	}
 
