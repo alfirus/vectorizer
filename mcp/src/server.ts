@@ -6,7 +6,7 @@ import { registerBrainTools } from "./tools/brain.js";
 import { registerPeerTools } from "./tools/peers.js";
 
 export function createServer() {
-  const server = new McpServer({ name: "@vectorizer/mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "@vectorizer/mcp", version: "0.2.0" });
   const cfg = parseConfig();
   const getClient = () => createClient(cfg);
   registerWorkspaceTools(server, getClient);
