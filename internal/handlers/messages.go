@@ -2,14 +2,16 @@ package handlers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/alfirus/vectorizer/internal/security"
-
 	"github.com/alfirus/vectorizer/internal/models"
 	"github.com/alfirus/vectorizer/internal/store"
 )
@@ -273,5 +275,82 @@ func (h *MessagesHandler) GetWorkspaceStats(c *fiber.Ctx) error {
 		})
 	}
 
+	return c.JSON(stats)
+}
+
+// SearchAllWorkspaces searches across all workspaces in parallel.
+func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
+	var req struct {
+		Query    string `json:"query"`
+		NResults int    `json:"n_results"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
+	if req.Query == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "query is required"})
+	}
+	if req.NResults <= 0 || req.NResults > 100 {
+		req.NResults = 10
+	}
+
+	// Get all workspaces
+	workspaces, err := h.store.ListWorkspaces()
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list workspaces"})
+	}
+
+	// Search all workspaces in parallel
+	type searchResult struct {
+		WorkspaceID string
+		Results     []models.SearchResult
+	}
+
+	var mu sync.Mutex
+	var allResults []models.SearchResult
+	var wg sync.WaitGroup
+
+	for _, wsID := range workspaces {
+		wg.Add(1)
+		go func(wsID string) {
+			defer wg.Done()
+			results, err := h.store.SearchWithScope(req.Query, wsID, "", "", "", "", req.NResults*2)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			for i := range results {
+				results[i].Source = "semantic"
+				results[i].Score = math.Max(0, 1-float64(results[i].Distance))
+			}
+			allResults = append(allResults, results...)
+			mu.Unlock()
+		}(wsID)
+	}
+	wg.Wait()
+
+	// Sort by score and deduplicate
+	sort.Slice(allResults, func(i, j int) bool { return allResults[i].Score > allResults[j].Score })
+	seen := make(map[string]bool)
+	deduped := make([]models.SearchResult, 0, len(allResults))
+	for _, r := range allResults {
+		if !seen[r.ID] {
+			seen[r.ID] = true
+			deduped = append(deduped, r)
+		}
+	}
+	if len(deduped) > req.NResults {
+		deduped = deduped[:req.NResults]
+	}
+
+	return c.JSON(fiber.Map{"results": deduped, "count": len(deduped)})
+}
+
+// SearchAnalytics returns search statistics.
+func (h *MessagesHandler) SearchAnalytics(c *fiber.Ctx) error {
+	stats, err := h.store.GetSearchAnalytics()
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to get analytics"})
+	}
 	return c.JSON(stats)
 }

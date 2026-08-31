@@ -54,3 +54,30 @@ func (h *WorkspacesHandler) GetWorkspace(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"id": id, "stats": stats})
 }
+
+// GetWorkspaceHealth returns detailed health info for a workspace.
+func (h *WorkspacesHandler) GetWorkspaceHealth(c *fiber.Ctx) error {
+	id := c.Params("id")
+	stats, err := h.store.GetWorkspaceStats(id)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to get workspace health"})
+	}
+
+	// Get embedding model info
+	embeddingModel := "unknown"
+	embeddingDim := 0
+	if h.store != nil {
+		if info, err := h.store.GetEmbeddingInfo(); err == nil {
+			embeddingModel = info["model"].(string)
+			embeddingDim = info["dimension"].(int)
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"workspace_id":    id,
+		"document_count":  stats["document_count"],
+		"embedding_model": embeddingModel,
+		"embedding_dim":   embeddingDim,
+		"status":          "healthy",
+	})
+}

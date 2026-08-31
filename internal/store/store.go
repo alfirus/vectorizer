@@ -609,6 +609,70 @@ func (s *Store) GetWorkspaceStats(workspaceID string) (map[string]interface{}, e
 	}, nil
 }
 
+// GetEmbeddingInfo returns the current embedding model and dimension.
+func (s *Store) GetEmbeddingInfo() (map[string]interface{}, error) {
+	if s.embed == nil {
+		return map[string]interface{}{
+			"model":     "none",
+			"dimension": 0,
+		}, nil
+	}
+
+	// Get model name from environment or default
+	model := os.Getenv("EMBED_MODEL")
+	if model == "" {
+		model = "text-embedding-nomic-embed-text-v2"
+	}
+
+	// Get dimension from a test embedding
+	testEmbedding, err := s.embed.EmbedSingle("test")
+	if err != nil {
+		return map[string]interface{}{
+			"model":     model,
+			"dimension": 0,
+		}, nil
+	}
+
+	return map[string]interface{}{
+		"model":     model,
+		"dimension": len(testEmbedding),
+	}, nil
+}
+
+// GetSearchAnalytics returns search statistics for monitoring.
+func (s *Store) GetSearchAnalytics() (map[string]interface{}, error) {
+	// Get all workspaces
+	workspaces, err := s.ListWorkspaces()
+	if err != nil {
+		return nil, err
+	}
+
+	totalDocs := 0
+	workspaceStats := make([]map[string]interface{}, 0, len(workspaces))
+
+	for _, wsID := range workspaces {
+		stats, err := s.GetWorkspaceStats(wsID)
+		if err != nil {
+			continue
+		}
+		docCount := 0
+		if dc, ok := stats["document_count"].(int); ok {
+			docCount = dc
+		}
+		totalDocs += docCount
+		workspaceStats = append(workspaceStats, map[string]interface{}{
+			"workspace_id":   wsID,
+			"document_count": docCount,
+		})
+	}
+
+	return map[string]interface{}{
+		"total_workspaces": len(workspaces),
+		"total_documents":  totalDocs,
+		"workspaces":       workspaceStats,
+	}, nil
+}
+
 // listCollections returns all collection names matching the workspace pattern.
 func (s *Store) listCollections() ([]chromadb.Collection, error) {
 	return s.chroma.ListCollections()

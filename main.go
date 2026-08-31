@@ -256,7 +256,10 @@ func main() {
 	api.Post("/messages/batch", messagesHandler.AddBatchMessages)
 	api.Post("/messages/search", messagesHandler.SearchMessages)
 	api.Get("/messages/search", messagesHandler.SearchMessagesSimple)
+	api.Post("/messages/search/all", messagesHandler.SearchAllWorkspaces)
+	api.Get("/messages/analytics", messagesHandler.SearchAnalytics)
 	api.Get("/workspaces/:id/stats", messagesHandler.GetWorkspaceStats)
+	api.Get("/workspaces/:id/health", workspacesHandler.GetWorkspaceHealth)
 
 	// Messages retrieval + ingestion + temporal
 	api.Get("/messages", messagesHandler.ListMessages)
