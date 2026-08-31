@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -126,8 +127,14 @@ func main() {
 
 	// Middleware
 	app.Use(logger.New())
+	// CORS: allow localhost + tailnet + LAN. Vectorizer is API-only; dashboard proxies via /api/vectorizer so this is for direct API callers + mobile.
+	// If CORS_ALLOWED_ORIGINS env is set, use it; else default to tailnet-friendly permissive regex.
+	allowedOrigins := "*"
+	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
+		allowedOrigins = v
+	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "http://localhost:8092,http://127.0.0.1:8092",
+		AllowOrigins: allowedOrigins,
 		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-API-Key",
 	}))
