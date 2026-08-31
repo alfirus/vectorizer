@@ -15,6 +15,8 @@ services:
       EMBED_DIMENSIONS: ${EMBED_DIMENSIONS:-1536}
       OAI_COMPATIBLE_URL: ${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}
       LM_STUDIO_URL: ${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
+      LIBRARIAN_MODE: ${LIBRARIAN_MODE:-workflow}
+      TTL_HOURS: ${TTL_HOURS:-0}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     volumes:
       - "C:/Users/alfir/SynologyDrive/ai:/data/ai:ro"
