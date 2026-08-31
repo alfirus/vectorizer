@@ -130,7 +130,28 @@ python vault/00-index/vault_index.py --reindex           # force rebuild all
 python vault/00-index/graph_build.py                     # rebuild GRAPH.json
 ```
 
-Cron: Hermes `vault-reindex-6h every 360m` runs `vault_index.py + graph_build.py` automatically.
+## Cron Jobs — Regarding Vectorizer
+
+| Job | Schedule | Where | What |
+|-----|----------|-------|------|
+| `vectorizer-reindex-1h` | `0 * * * *` (hourly) | Hermes `origin` | `vectorizer_reindex.py` → `vault_index.py` diff embed 768d; failures alert via Telegram DM + email |
+| `vectorizer-backup-daily` | `0 3 * * *` (03:00) | Hermes `origin` | `vectorizer_backup.py` → `SynologyDrive/ai/backups/vectorizer/chroma-YYYY-MM-DD.tar.gz` + `GRAPH.json/MEMORY_INDEX.json`, prune `+7d` (keep 7 days) |
+| `vectorizer-health-5m` | `*/5 * * * *` | Hermes `origin` | `vectorizer_healthcheck.py` probes `8091/health + 8100/heartbeat + 8092/ + 1234/v1/models`; auto `docker restart`, re-applies `tailscale serve --https=443 http://localhost:8092` |
+| `deriver` | `2s/5msg` ticker | Inside `vectorizer` | `Summarize("Extract 1-3 facts" + text[:8000]) → CreateConclusion + AddReasoningEdge` on `POST /messages` |
+| `dreamer` | `3h` ticker | Inside `vectorizer` | `ListWorkspaces→ListSessions→GetMessages(20)` surprisal `<0.15` skip → `CreateConclusion(source:dreamer)` |
+
+Alerts (server-only) live in `C:/Users/alfir/vectorizer/.env`:
+
+```
+ALERT_TELEGRAM_BOT_TOKEN=   # @BotFather token, Telegram DM alert
+ALERT_TELEGRAM_CHAT_ID=     # use @userinfobot / getUpdates
+ALERT_EMAIL_TO=alfirus@gmail.com
+ALERT_EMAIL_FROM=vectorizer@alfirus.my
+SMTP_HOST=smtp.gmail.com  SMTP_PORT=587  SMTP_USER=  SMTP_PASS= # Gmail App Password (16-char)
+BACKUP_RETENTION_DAYS=7
+```
+
+Configure without touching `.env` by hand: **Vectorizer Dashboard → Settings** (`/dashboard/settings`) edits all of the above server-side (secrets masked in UI; schedules persisted to `cron_schedules.json`; cron ownership stays on host `hermes cron list`).
 
 ## Configuration
 
@@ -331,16 +352,6 @@ Each workspace maps to a separate ChromaDB collection: `ws_<workspace_id>`. This
 | `hybrid` (`LIBRARIAN_MODE=hybrid`) | Same workflow + async Brain enrichment: `VaultTagSystem` tags+entities async, `VaultRerankSystem` order with 1.5s cap (≥3 hits) | +0-1.5s on eligible searches | Complex ambiguous queries ("that drone thing") — AI rescues synonyms |
 
 **Recommendation:** `workflow` at 68 files / 1204 chunks. AI helps most at 5k-50k dense cross-linked chunks. Brain now reserved for **Deriver (2s/5msg → conclusions) + Dreamer (3h, surprisal 0.15) + Chat synthesis**.
-
-## Cron Jobs — Regarding Vectorizer
-
-| Job | Schedule | Where | What |
-|-----|----------|-------|------|
-| `vault-reindex-6h` | `every 360m` (6h) | Hermes `telegram:Alfirus Ahmad` — `jobs.json 943f6f432dee`, next `15:16 +08` | `vault_index.py + graph_build.py` → hash dedupe, embed 768d, report `indexed_files/chunks/skipped/errors` + `curl /health` |
-| `deriver` | `2s/5msg` ticker | Inside `vectorizer` container | `Summarize("Extract 1-3 facts" + text[:8000]) → CreateConclusion + AddReasoningEdge` on every `POST /messages` |
-| `dreamer` | `3h` ticker | Inside `vectorizer` container | `ListWorkspaces→ListSessions→GetMessages(20)` surprisal `<0.15` skip → `CreateConclusion(source:dreamer)` |
-
-No other job touches Vectorizer.
 
 ## LLM Brain Modes
 
