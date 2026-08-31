@@ -76,3 +76,28 @@ services:
 volumes:
   chroma_data:
   qwen_cache:
+  dashboard:
+    build: ../vectorizer-dashboard
+    container_name: vectorizer-dashboard
+    ports:
+      - "8092:8092"
+    environment:
+      VECTORIZER_URL: http://vectorizer:8091
+      VECTORIZER_API_KEY: ${DEFAULT_API_KEY:-vectorizer-local-key}
+      LM_STUDIO_KEY: ${LM_STUDIO_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive}
+      GRAPH_PATH: /data/ai/maisarah/vault/00-index/GRAPH.json
+    volumes:
+      - "C:/Users/alfir/SynologyDrive/ai:/data/ai:ro"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      vectorizer:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8092/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
