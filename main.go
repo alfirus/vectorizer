@@ -337,14 +337,9 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Get("/keys", keysH.List)
 
 	// Messages missing CRUD ()
-	api.Put("/messages/:id", func(c *fiber.Ctx) error {
-		var req struct{ Content string `json:"content"`}
-		_ = c.BodyParser(&req)
-		// naive: re-add as new version
-		return c.JSON(fiber.Map{"updated": true})
-	})
-	api.Delete("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"deleted": true}) })
-	api.Get("/messages/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"id": c.Params("id")}) })
+	api.Put("/messages/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "update not implemented — delete + re-add instead"}) })
+	api.Delete("/messages/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "delete not implemented — use TTL or recreate workspace"}) })
+	api.Get("/messages/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "get by id not implemented — use GET /messages?workspace_id=..."}) })
 
 	// Session context with rolling-window tokens budgeting
 	api.Get("/workspaces/:workspace_id/sessions/:session_id/context", func(c *fiber.Ctx) error {
@@ -360,15 +355,15 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	})
 
 	// Sessions missing CRUD
-	api.Put("/sessions/:id", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"updated":true}) })
-	api.Delete("/sessions/:id", func(c *fiber.Ctx) error { return c.Status(202).JSON(fiber.Map{"deleted":true}) })
-	api.Post("/sessions/:id/clone", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"cloned":true}) })
+	api.Put("/sessions/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "clone/sessions stub — use POST /sessions"}) })
+	api.Delete("/sessions/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "delete not implemented"}) })
+	api.Post("/sessions/:id/clone", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "clone not implemented — use POST /sessions"}) })
 
 	// Webhooks (handlers use existing whMgr)
 	whHandler := handlers.NewWebhooksHandler(whMgr)
 	api.Post("/webhooks", whHandler.Register)
 	api.Get("/webhooks", whHandler.List)
-	api.Delete("/webhooks/:id", func(c *fiber.Ctx) error { return c.Status(204).Send(nil) })
+	api.Delete("/webhooks/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "delete not implemented"}) })
 	api.Get("/webhooks/test", func(c *fiber.Ctx) error { whMgr.Fire(c.Query("workspace_id","default"), "test", map[string]string{"ok":"true"}); return c.JSON(fiber.Map{"fired":true}) })
 
 	// gRPC alongside REST (gRPC, Phase 5)
