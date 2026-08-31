@@ -76,6 +76,7 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 		fmt.Printf("Error adding message: %v\n", err)
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to store message"})
 	}
+	store.GlobalMetrics.MessagesAdded.Add(1)
 	if h.deriver != nil { h.deriver.Enqueue(msg.WorkspaceID, msg.SessionID, req.PeerID, msg.ID, msg.Content) }
 	if h.webhooks != nil { h.webhooks.Fire(msg.WorkspaceID, "message.created", map[string]string{"id": msg.ID, "session_id": msg.SessionID}) }
 
@@ -162,6 +163,7 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 			})
 			continue
 		}
+		store.GlobalMetrics.MessagesAdded.Add(1)
 		if h.deriver != nil { h.deriver.Enqueue(m.WorkspaceID, m.SessionID, msg.PeerID, m.ID, m.Content) }
 		if h.webhooks != nil { h.webhooks.Fire(m.WorkspaceID, "message.created", map[string]string{"id": m.ID, "session_id": m.SessionID}) }
 

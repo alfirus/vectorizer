@@ -73,7 +73,7 @@ func main() {
 	fmt.Printf("  Embedding dimensions: %d\n", cfg.EmbedDimensions)
 
 	// Initialize store
-	store := store.New(chromaClient, embedService)
+	vecStore := store.New(chromaClient, embedService)
 
 	// Initialize LLM brain (optional)
 	var brain *llmbrain.Service
@@ -83,7 +83,7 @@ func main() {
 		if llmBaseURL != "" {
 			brain = llmbrain.New(llmBaseURL, llmAPIKey, cfg.LLMModel)
 			fmt.Println("  LLM Brain initialized successfully")
-			store.SetBrain(brain)
+			vecStore.SetBrain(brain)
 			fmt.Println("  Vault librarian wired: auto-tag + rerank enabled")
 		} else {
 			fmt.Println("  Warning: LLM enabled but no base URL configured")
@@ -93,7 +93,7 @@ func main() {
 	// Initialize deriver (deriver, async conclusions, 1536d)
 	var drv *deriver.Deriver
 	if brain != nil {
-		drv = deriver.New(store, brain)
+		drv = deriver.New(vecStore, brain)
 		drv.Start()
 		defer drv.Stop()
 	}
@@ -102,13 +102,13 @@ func main() {
 	whMgr := webhooks.New()
 
 	// Initialize handlers
-	workspacesHandler := handlers.NewWorkspacesHandler(store)
-	messagesHandler := handlers.NewMessagesHandler(store)
+	workspacesHandler := handlers.NewWorkspacesHandler(vecStore)
+	messagesHandler := handlers.NewMessagesHandler(vecStore)
 	if drv != nil { messagesHandler.SetDeriver(drv) }
 	messagesHandler.SetWebhooks(whMgr)
 	var brainHandler *handlers.BrainHandler
 	if brain != nil {
-		brainHandler = handlers.NewBrainHandler(brain, store)
+		brainHandler = handlers.NewBrainHandler(brain, vecStore)
 	}
 
 	// Initialize Fiber app
@@ -175,18 +175,21 @@ func main() {
 		return c.Next()
 	})
 
-	// Rate limiter (phase 4) - simple token bucket 10/s per IP / API key / JWT workspace
-	rl := newRateLimiter(10, time.Second)
+	// Rate limiter (phase 4) - 50/s for API-key auth (vault reindex burst), 10/s for IP fallback
+	rl := newRateLimiter(50, time.Second)
 	app.Use(func(c *fiber.Ctx) error {
 		key := c.Get("X-API-Key")
+		limit := 50
 		if key == "" {
+			limit = 10
 			if claims, ok := c.Locals("jwt").(*security.Claims); ok && claims != nil && claims.Workspace != "" {
 				key = "jwt:" + claims.Workspace
+				limit = 50
 			} else {
 				key = c.IP()
 			}
 		}
-		if !rl.Allow(key) {
+		if !rl.AllowWithLimit(key, limit) {
 			return c.Status(429).JSON(fiber.Map{"error": "rate limit exceeded"})
 		}
 		return c.Next()
@@ -213,16 +216,7 @@ func main() {
 api.Get("/metrics", func(c *fiber.Ctx) error {
 		metrics := store.GlobalMetrics
 		c.Set("Content-Type", "text/plain")
-		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up
-# TYPE vectorizer_up gauge
-vectorizer_up 1
-# HELP vectorizer_messages_total Total messages added
-# TYPE vectorizer_messages_total counter
-vectorizer_messages_total %d
-# HELP vectorizer_searches_total Total searches
-# TYPE vectorizer_searches_total counter
-vectorizer_searches_total %d
-", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load()))
+		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total Total messages added\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total %d\n# HELP vectorizer_searches_total Total searches\n# TYPE vectorizer_searches_total counter\nvectorizer_searches_total %d\n", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load()))
 	})
 
 	// Workspaces ()
@@ -234,17 +228,17 @@ vectorizer_searches_total %d
 	api.Put("/workspaces/:id", func(c *fiber.Ctx) error {
 		var req struct{ Metadata map[string]interface{} `json:"metadata"`}
 		_ = c.BodyParser(&req)
-		_ = store.UpdateWorkspace(c.Params("id"), req.Metadata)
+		_ = vecStore.UpdateWorkspace(c.Params("id"), req.Metadata)
 		return c.JSON(fiber.Map{"updated": true})
 	})
 	api.Delete("/workspaces/:id", func(c *fiber.Ctx) error {
-		_ = store.DeleteWorkspace(c.Params("id"))
+		_ = vecStore.DeleteWorkspace(c.Params("id"))
 		return c.Status(202).JSON(fiber.Map{"deleted": true})
 	})
 	api.Post("/workspaces/:id/search", func(c *fiber.Ctx) error {
 		var req struct{ Query string `json:"query"`; N int `json:"n_results"`}
 		_ = c.BodyParser(&req); if req.N==0 { req.N=5 }
-		results,_:=store.Search(req.Query, c.Params("id"), "", "", req.N)
+		results,_:=vecStore.Search(req.Query, c.Params("id"), "", "", req.N)
 		return c.JSON(fiber.Map{"results": results})
 	})
 	api.Get("/workspaces/:id/queue", func(c *fiber.Ctx) error {
@@ -252,13 +246,13 @@ vectorizer_searches_total %d
 	})
 	api.Post("/workspaces/:id/dream", func(c *fiber.Ctx) error {
 		if brain==nil { return c.Status(503).JSON(fiber.Map{"error":"brain disabled"})}
-		d:=dreamer.New(store, brain, 0)
+		d:=dreamer.New(vecStore, brain, 0)
 		go d.RunOnce()
 		return c.JSON(fiber.Map{"scheduled": true})
 	})
 
 	// Sessions (peers + scopes)
-	sessionsHandler := handlers.NewSessionsHandler(store)
+	sessionsHandler := handlers.NewSessionsHandler(vecStore)
 	api.Post("/sessions", sessionsHandler.CreateSession)
 	api.Get("/sessions", sessionsHandler.ListSessions)
 
@@ -273,7 +267,7 @@ vectorizer_searches_total %d
 
 	// Messages retrieval + ingestion + temporal
 	api.Get("/messages", messagesHandler.ListMessages)
-	ingestH := handlers.NewIngestHandler(store)
+	ingestH := handlers.NewIngestHandler(vecStore)
 	api.Post("/messages/upload", ingestH.Upload)
 	api.Get("/messages/grep", ingestH.Grep)
 	api.Get("/messages/temporal", ingestH.Temporal)
@@ -281,7 +275,7 @@ vectorizer_searches_total %d
 		if cfg.TTLHours==0 && c.Query("before")=="" { return c.Status(400).JSON(fiber.Map{"error":"TTL disabled or before required"})}
 		before:=c.Query("before")
 		if before=="" { before=time.Now().Add(-time.Duration(cfg.TTLHours)*time.Hour).Format(time.RFC3339) }
-		n,_:=store.TTLDelete(c.Params("id"), before)
+		n,_:=vecStore.TTLDelete(c.Params("id"), before)
 		return c.JSON(fiber.Map{"deleted":n})
 	})
 	// Admin hot-swap (no restart)
@@ -290,8 +284,8 @@ vectorizer_searches_total %d
 	api.Get("/admin/embedding", adminH.GetEmbedding)
 
 	// Peers + chat ()
-	peersH := handlers.NewPeersHandler(store)
-	chatH := handlers.NewChatHandler(store, brain)
+	peersH := handlers.NewPeersHandler(vecStore)
+	chatH := handlers.NewChatHandler(vecStore, brain)
 	api.Post("/workspaces/:workspace_id/peers", peersH.CreatePeer)
 	api.Get("/workspaces/:workspace_id/peers", peersH.ListPeers)
 	api.Put("/workspaces/:workspace_id/peers/:peer_id", peersH.UpdatePeer)
@@ -305,12 +299,12 @@ vectorizer_searches_total %d
 	api.Get("/workspaces/:workspace_id/chat/stream", chatH.ChatStream)
 	api.Post("/workspaces/:workspace_id/peers/:peer_id/representation", func(c *fiber.Ctx) error {
 		ws:=c.Params("workspace_id"); pid:=c.Params("peer_id")
-		text, docs, _:=store.GetRepresentation(ws, pid, c.Query("session_id"), 25)
+		text, docs, _:=vecStore.GetRepresentation(ws, pid, c.Query("session_id"), 25)
 		return c.JSON(fiber.Map{"text": text, "conclusions": docs})
 	})
 
 	// Conclusions ()
-	conclHandler := handlers.NewConclusionsHandler(store)
+	conclHandler := handlers.NewConclusionsHandler(vecStore)
 	api.Post("/conclusions", conclHandler.Create)
 	api.Post("/conclusions/batch", conclHandler.Batch)
 	api.Post("/conclusions/query", conclHandler.Query)
@@ -319,7 +313,7 @@ vectorizer_searches_total %d
 	api.Get("/representations", conclHandler.Representation)
 
 	// Scopes ()
-	scopesH := handlers.NewScopesHandler(store)
+	scopesH := handlers.NewScopesHandler(vecStore)
 	api.Post("/workspaces/:workspace_id/scopes", scopesH.Create)
 	api.Get("/workspaces/:workspace_id/scopes", scopesH.List)
 	api.Get("/workspaces/:workspace_id/scopes/:scope_id", scopesH.Get)
@@ -349,12 +343,12 @@ vectorizer_searches_total %d
 	api.Get("/workspaces/:workspace_id/sessions/:session_id/context", func(c *fiber.Ctx) error {
 		ws:=c.Params("workspace_id"); sid:=c.Params("session_id")
 		budget, _ := parseTokens(c.Query("tokens", "10000"))
-		docs,_:=store.GetMessages(ws, sid, 100, 0)
-		text, _, _:=store.GetRepresentation(ws, "", sid, 25)
-		docs, text = store.FitContextWithinTokens(docs, text, budget)
+		docs,_:=vecStore.GetMessages(ws, sid, 100, 0)
+		text, _, _:=vecStore.GetRepresentation(ws, "", sid, 25)
+		docs, text = vecStore.FitContextWithinTokens(docs, text, budget)
 		used := 0
-		for _, d := range docs { if doc, ok := d["document"].(string); ok { used += store.EstimateTokens(doc) } }
-		used += store.EstimateTokens(text)
+		for _, d := range docs { if doc, ok := d["document"].(string); ok { used += vecStore.EstimateTokens(doc) } }
+		used += vecStore.EstimateTokens(text)
 		return c.JSON(fiber.Map{"messages": docs, "representation": text, "tokens_used": used, "tokens_budget": budget})
 	})
 
@@ -375,7 +369,7 @@ vectorizer_searches_total %d
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 		if err == nil {
 			gs := grpc.NewServer()
-			pb.RegisterVectorizerServiceServer(gs, grpcsrv.New(store, brain))
+			pb.RegisterVectorizerServiceServer(gs, grpcsrv.New(vecStore, brain))
 			log.Printf("gRPC listening on :%d", cfg.GRPCPort)
 			_ = gs.Serve(lis)
 		}
@@ -383,7 +377,7 @@ vectorizer_searches_total %d
 
 	// Dreamer (offline, 1536d) — every 3 hours
 	if brain != nil {
-		d := dreamer.New(store, brain, 3*time.Hour)
+		d := dreamer.New(vecStore, brain, 3*time.Hour)
 		d.Start()
 		defer d.Stop()
 	}
@@ -416,6 +410,14 @@ func (r *rateLimiter) Allow(key string) bool {
 	times := r.tokens[key]; filtered := times[:0]
 	for _, t := range times { if t.After(cutoff) { filtered = append(filtered, t) } }
 	if len(filtered) >= r.limit { r.tokens[key] = filtered; return false }
+	r.tokens[key] = append(filtered, now); return true
+}
+func (r *rateLimiter) AllowWithLimit(key string, limit int) bool {
+	r.mu.Lock(); defer r.mu.Unlock()
+	now := time.Now(); cutoff := now.Add(-r.window)
+	times := r.tokens[key]; filtered := times[:0]
+	for _, t := range times { if t.After(cutoff) { filtered = append(filtered, t) } }
+	if len(filtered) >= limit { r.tokens[key] = filtered; return false }
 	r.tokens[key] = append(filtered, now); return true
 }
 

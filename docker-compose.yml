@@ -73,9 +73,6 @@ services:
       CHROMA_SERVER_HTTP_PORT: 8000
     restart: unless-stopped
 
-volumes:
-  chroma_data:
-  qwen_cache:
   dashboard:
     build: ../vectorizer-dashboard
     container_name: vectorizer-dashboard
@@ -101,3 +98,7 @@ volumes:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+volumes:
+  chroma_data:
+  qwen_cache:
