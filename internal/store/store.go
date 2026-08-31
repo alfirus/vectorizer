@@ -547,6 +547,7 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 	}
 	// Optional: if hybrid flag via metadata scope, rrfFusion could be applied here when lexical pool available
 	return deduped, nil
+tGlobalMetrics.SearchesTotal.Add(1)
 }
 
 func (s *Store) HybridSearch(query, workspaceID, sessionID, role string, nResults int) ([]models.SearchResult, error) {

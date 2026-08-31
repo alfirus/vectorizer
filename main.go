@@ -127,7 +127,7 @@ func main() {
 	// Middleware
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
+		AllowOrigins: "http://localhost:8092,http://127.0.0.1:8092",
 		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-API-Key",
 	}))
@@ -210,15 +210,26 @@ func main() {
 			"llm_enabled": cfg.LLMEnabled, "chromadb": chromaStatus, "embedding_model": cfg.EmbedModel,
 		})
 	})
-	api.Get("/metrics", func(c *fiber.Ctx) error {
+api.Get("/metrics", func(c *fiber.Ctx) error {
+		metrics := store.GlobalMetrics
 		c.Set("Content-Type", "text/plain")
-		//  counters placeholder
-		return c.SendString("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total 0\n")
+		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up
+# TYPE vectorizer_up gauge
+vectorizer_up 1
+# HELP vectorizer_messages_total Total messages added
+# TYPE vectorizer_messages_total counter
+vectorizer_messages_total %d
+# HELP vectorizer_searches_total Total searches
+# TYPE vectorizer_searches_total counter
+vectorizer_searches_total %d
+", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load()))
 	})
 
 	// Workspaces ()
 	api.Get("/workspaces", workspacesHandler.ListWorkspaces)
 	api.Post("/workspaces", workspacesHandler.CreateWorkspace)
+	// Health endpoint must be before :id to avoid param matching
+	api.Get("/workspaces/:id/health", workspacesHandler.GetWorkspaceHealth)
 	api.Get("/workspaces/:id", workspacesHandler.GetWorkspace)
 	api.Put("/workspaces/:id", func(c *fiber.Ctx) error {
 		var req struct{ Metadata map[string]interface{} `json:"metadata"`}
@@ -259,7 +270,6 @@ func main() {
 	api.Post("/messages/search/all", messagesHandler.SearchAllWorkspaces)
 	api.Get("/messages/analytics", messagesHandler.SearchAnalytics)
 	api.Get("/workspaces/:id/stats", messagesHandler.GetWorkspaceStats)
-	api.Get("/workspaces/:id/health", workspacesHandler.GetWorkspaceHealth)
 
 	// Messages retrieval + ingestion + temporal
 	api.Get("/messages", messagesHandler.ListMessages)

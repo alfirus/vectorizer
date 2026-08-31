@@ -25,3 +25,7 @@ sdks/typescript/node_modules/
 sdks/python/__pycache__/
 .env.bak*
 nul
+
+# Script artifacts
+populate_shiela.py
+workflow_sex_slaves.json
