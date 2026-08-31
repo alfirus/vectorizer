@@ -13,6 +13,12 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => Clien
   server.tool("vectorizer_get_workspace_stats", "Get workspace document count", { workspace_id: z.string().min(1) }, async (a) => {
     try { const data = await getClient().req(`/api/v1/workspaces/${encodeURIComponent(a.workspace_id)}/stats`); return json(data); } catch (e) { return err(e); }
   });
+  server.tool("vectorizer_get_workspace_health", "Get workspace health (embedding model, dimension, doc count, status)", { workspace_id: z.string().min(1) }, async (a) => {
+    try { const data = await getClient().req(`/api/v1/workspaces/${encodeURIComponent(a.workspace_id)}/health`); return json(data); } catch (e) { return err(e); }
+  });
+  server.tool("vectorizer_get_search_analytics", "Get search analytics (total workspaces, documents, per-workspace stats)", {}, async () => {
+    try { const data = await getClient().req("/api/v1/messages/analytics"); return json(data); } catch (e) { return err(e); }
+  });
   server.tool("vectorizer_health", "Health + ChromaDB status", {}, async () => {
     try { const data = await getClient().req("/api/v1/health"); return json(data); } catch (e) { return err(e); }
   });
