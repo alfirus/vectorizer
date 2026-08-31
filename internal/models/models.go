@@ -93,6 +93,8 @@ type SearchResult struct {
 	Document string                 `json:"document,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 	Distance float32                `json:"distance,omitempty"`
+	Score    float64                `json:"score,omitempty"`    // 1-distance (0-1, higher=better)
+	Source   string                 `json:"source,omitempty"`   // "semantic", "keyword", "hybrid"
 }
 
 type Peer struct {

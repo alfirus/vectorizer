@@ -1,8 +1,10 @@
 package store
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -13,6 +15,77 @@ import (
 	"github.com/alfirus/vectorizer/internal/llmbrain"
 	"github.com/alfirus/vectorizer/internal/models"
 )
+
+// contentHash generates SHA-256 hash for dedup.
+// Pattern from aict.my ChromaDB integration.
+func contentHash(workspaceID, sessionID, content string) string {
+	h := sha256.Sum256([]byte(workspaceID + "|" + sessionID + "|" + content))
+	return fmt.Sprintf("%x", h)
+}
+
+// checkContentHash checks if content with same hash exists in last hour.
+// Returns true if duplicate found.
+func (s *Store) checkContentHash(collName, hash string) (bool, error) {
+	coll, err := s.chroma.GetCollection(collName)
+	if err != nil {
+		return false, err
+	}
+
+	// Search for documents with same content_hash in last hour
+	where := map[string]interface{}{
+		"content_hash": hash,
+	}
+
+	results, err := s.chroma.Query(
+		coll.ID,
+		nil, // no embedding needed for metadata filter
+		1,
+		where,
+		[]string{"documents"},
+	)
+	if err != nil {
+		return false, err
+	}
+
+	return len(results) > 0, nil
+}
+
+// applyTimeDecay penalizes old memories exponentially.
+// Memories older than 7 days (168 hours) get exponentially penalized.
+// This ensures recent context ranks higher in search results.
+// Pattern from aict.my ChromaDB integration.
+func applyTimeDecay(results []models.SearchResult) []models.SearchResult {
+	now := time.Now()
+	for i := range results {
+		// Try to get created_at from metadata
+		var createdAt time.Time
+		if meta := results[i].Metadata; meta != nil {
+			if ts, ok := meta["created_at"].(string); ok {
+				if t, err := time.Parse(time.RFC3339, ts); err == nil {
+					createdAt = t
+				}
+			}
+			// Also try timestamp field
+			if ts, ok := meta["timestamp"].(string); ok {
+				if t, err := time.Parse(time.RFC3339, ts); err == nil {
+					createdAt = t
+				}
+			}
+		}
+
+		if !createdAt.IsZero() {
+			hoursSince := now.Sub(createdAt).Hours()
+			if hoursSince > 168 { // 7 days
+				// Exponential decay: similarity *= exp(-0.01 * (hours - 168) / 24)
+				decay := math.Exp(-0.01 * (hoursSince - 168) / 24)
+				results[i].Distance = float32(float64(results[i].Distance) / decay)
+			}
+		}
+	}
+	// Re-sort by adjusted distance
+	sort.Slice(results, func(i, j int) bool { return results[i].Distance < results[j].Distance })
+	return results
+}
 
 const maxChunkSize = 6000 // chars per chunk — vault uses 3600-3800 to avoid double-split
 
@@ -201,12 +274,19 @@ func (s *Store) GetCollectionName(workspaceID string) string {
 // AddMessage stores a message in ChromaDB with embedding.
 func (s *Store) AddMessage(msg *models.Message, content string) error {
 	collName := s.GetCollectionName(msg.WorkspaceID)
-	
+
 	// Ensure collection exists (workspace-isolated)
 	if _, err := s.chroma.EnsureCollection(collName, map[string]interface{}{
 		"workspace_id": msg.WorkspaceID,
 	}); err != nil {
 		return fmt.Errorf("ensure collection: %w", err)
+	}
+
+	// Content dedup: skip if same content exists in last hour
+	// Pattern from aict.my ChromaDB integration
+	hash := contentHash(msg.WorkspaceID, msg.SessionID, content)
+	if isDuplicate, err := s.checkContentHash(collName, hash); err == nil && isDuplicate {
+		return nil // silently skip duplicate
 	}
 
 	// Get existing IDs to avoid duplicates
@@ -230,6 +310,7 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 			"message_id": msg.ID, "session_id": msg.SessionID, "workspace_id": msg.WorkspaceID,
 			"role": msg.Role, "created_at": msg.CreatedAt.Format(time.RFC3339),
 			"chunk_index": i, "total_chunks": len(chunks),
+			"content_hash": contentHash(msg.WorkspaceID, msg.SessionID, content),
 		}
 		if v, ok := msg.Metadata["scope"].(string); ok && v != "" { meta["scope"] = v }
 		if v, ok := msg.Metadata["peer_id"].(string); ok && v != "" { meta["peer_id"] = v }
@@ -389,6 +470,16 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 	for _, r := range results { if _, ok := seen[r.ID]; ok { continue }; seen[r.ID]=struct{}{}; deduped=append(deduped, r) }
 	if len(deduped) > nResults { deduped = deduped[:nResults] }
 
+	// Time-decay: memories older than 7 days get exponentially penalized
+	// Recent context matters more — matches aict.my pattern
+	deduped = applyTimeDecay(deduped)
+
+	// Set score and source for transparency
+	for i := range deduped {
+		deduped[i].Score = math.Max(0, 1-float64(deduped[i].Distance))
+		deduped[i].Source = "semantic"
+	}
+
 	// Graph expand: vector top-k -> 1-hop neighbors via GRAPH.json (file-based, <10ms, no Postgres)
 	if s.graph != nil && len(deduped) >= 2 && len(deduped) <= 10 {
 		seedIDs := make([]string, 0, len(deduped)*2)
@@ -481,8 +572,19 @@ func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string
 			if len(bm25) > nResults { bm25=bm25[:nResults] }
 		}
 	}
-	if len(bm25)==0 { return vec, nil }
-	return rrfFusion(vec, bm25, nResults), nil
+	if len(bm25)==0 {
+		for i := range vec {
+			vec[i].Score = math.Max(0, 1-float64(vec[i].Distance))
+			vec[i].Source = "semantic"
+		}
+		return applyTimeDecay(vec), nil
+	}
+	fused := rrfFusion(vec, bm25, nResults)
+	for i := range fused {
+		fused[i].Score = math.Max(0, 1-float64(fused[i].Distance))
+		fused[i].Source = "hybrid"
+	}
+	return applyTimeDecay(fused), nil
 }
 
 // GetWorkspaceStats returns stats for a workspace.
