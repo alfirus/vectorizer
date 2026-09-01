@@ -82,8 +82,9 @@ services:
       - "8092:8092"
     environment:
       VECTORIZER_URL: http://vectorizer:8091
-      VECTORIZER_API_KEY: ${DEFAULT_API_KEY:-vectorizer-local-key}
+      VECTORIZER_API_KEY: ${VECTORIZER_API_KEY:-${DEFAULT_API_KEY:-vectorizer-local-key}}
       CHROMA_URL: http://chromadb:8000
+      LM_STUDIO_URL: ${LM_STUDIO_URL:-${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}}
       LM_STUDIO_KEY: ${LM_STUDIO_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive}
       GRAPH_PATH: /data/ai/maisarah/vault/00-index/GRAPH.json
