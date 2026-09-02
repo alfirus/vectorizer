@@ -22,7 +22,7 @@ func New(baseURL, apiKey, model string) *Service {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		model:   model,
-		client:  &http.Client{Timeout: 12 * time.Second},
+		client:  &http.Client{Timeout: 10 * time.Minute},
 	}
 }
 
