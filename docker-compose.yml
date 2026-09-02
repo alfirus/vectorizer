@@ -14,7 +14,16 @@ services:
       EMBED_MODEL: ${EMBED_MODEL:-Qwen/Qwen3-Embedding-4B-GGUF}
       EMBED_DIMENSIONS: ${EMBED_DIMENSIONS:-1536}
       OAI_COMPATIBLE_URL: ${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}
+      OAI_API_KEY: ${OAI_API_KEY:-${LM_STUDIO_API_KEY:-}}
       LM_STUDIO_URL: ${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
+      LM_STUDIO_API_KEY: ${LM_STUDIO_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-${LM_STUDIO_API_KEY:-}}
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_PROVIDER: ${LLM_PROVIDER:-lm-studio}
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
+      LLM_STUDIO_URL: ${LLM_STUDIO_URL:-${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}}
+      LLM_OAI_COMPATIBLE_URL: ${LLM_OAI_COMPATIBLE_URL:-}
+      LLM_OAI_API_KEY: ${LLM_OAI_API_KEY:-${LM_STUDIO_API_KEY:-}}
       LIBRARIAN_MODE: ${LIBRARIAN_MODE:-workflow}
       TTL_HOURS: ${TTL_HOURS:-0}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -80,12 +89,14 @@ services:
     container_name: vectorizer-dashboard
     ports:
       - "8092:8092"
+    env_file:
+      - .env
     environment:
       VECTORIZER_URL: http://vectorizer:8091
       VECTORIZER_API_KEY: ${VECTORIZER_API_KEY:-${DEFAULT_API_KEY:-vectorizer-local-key}}
       CHROMA_URL: http://chromadb:8000
       LM_STUDIO_URL: ${LM_STUDIO_URL:-${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}}
-      LM_STUDIO_KEY: ${LM_STUDIO_API_KEY:-}
+      LM_STUDIO_KEY: ${LM_STUDIO_API_KEY:-${OAI_API_KEY:-}}
       LLM_MODEL: ${LLM_MODEL:-qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive}
       GRAPH_PATH: /data/ai/maisarah/vault/00-index/GRAPH.json
       VAULT_ROOT: /data/ai
