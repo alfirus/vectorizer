@@ -3,7 +3,7 @@ services:
     build: .
     container_name: vectorizer
     ports:
-      - "127.0.0.1:8091:8091"
+      - "0.0.0.0:8091:8091"
       - "127.0.0.1:50051:50051"
     env_file:
       - .env
