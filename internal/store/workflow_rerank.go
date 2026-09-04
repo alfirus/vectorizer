@@ -16,7 +16,7 @@ func WorkflowRerankScore(query string, hits []models.SearchResult) []models.Sear
 		return hits
 	}
 	qLower := strings.ToLower(query)
-	qTerms := strings.Fields(qLower)
+	qTerms := LexTokens(qLower)
 	// also extract entities from query (Title Case terms)
 	qEntities := map[string]bool{}
 	for _, t := range qTerms {
@@ -136,12 +136,15 @@ func WorkflowRerankScore(query string, hits []models.SearchResult) []models.Sear
 	return out
 }
 
-// HybridSearch helper uses same BM25 logic
+// HybridSearch helper uses same BM25 logic (identifier-aware tokens).
 func bm25Score(query, doc string) float64 {
-	qt := strings.Fields(strings.ToLower(query))
+	qt := LexTokens(query)
 	dt := strings.ToLower(doc)
 	s := 0.0
 	for _, t := range qt {
+		if len(t) < 2 {
+			continue
+		}
 		s += float64(strings.Count(dt, t))
 	}
 	return s

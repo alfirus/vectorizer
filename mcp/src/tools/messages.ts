@@ -67,8 +67,9 @@ export function registerMessageTools(server: McpServer, getClient: () => Client)
       const data = await getClient().req(`/api/v1/messages/${encodeURIComponent(a.id)}${q}`, { method: "DELETE" }); return json(data);
     } catch (e) { return err(e); }
   });
-  server.tool("vectorizer_update_message", "Correct a message: replaces content under the SAME id (fresh embedding + chunking). Role/session recovered from stored chunks when omitted.", {
-    id: z.string().min(1), content: z.string().min(1),
+  server.tool("vectorizer_update_message", "Correct a message: replaces content under the SAME id (fresh embedding + chunking). Role/session recovered from stored chunks when omitted. Pass `sections` ({heading: body}) to splice only named ## sections — untouched chunks keep embeddings, retries are no-ops.", {
+    id: z.string().min(1), content: z.string().optional(),
+    sections: z.record(z.string()).optional(),
     workspace_id: z.string().optional(), session_id: z.string().optional(),
     role: z.enum(["user","assistant","system"]).optional(),
   }, async (a) => {

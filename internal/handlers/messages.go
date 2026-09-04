@@ -414,6 +414,7 @@ func (h *MessagesHandler) UpdateMessageContent(c *fiber.Ctx) error {
 	}
 	var req struct {
 		Content     string                 `json:"content"`
+		Sections    map[string]string      `json:"sections,omitempty"`
 		WorkspaceID string                 `json:"workspace_id"`
 		SessionID   string                 `json:"session_id"`
 		Role        string                 `json:"role"`
@@ -421,6 +422,22 @@ func (h *MessagesHandler) UpdateMessageContent(c *fiber.Ctx) error {
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
+	// Splice path: named ## sections replace in place, only changed chunks
+	// re-embedded, message ID stable. Unknown sections append (upsert).
+	if len(req.Sections) > 0 {
+		ws := h.resolveMessageWorkspace(req.WorkspaceID, messageID)
+		if ws == "" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
+		}
+		res, err := h.store.UpdateMessageSections(ws, messageID, req.Sections, req.Metadata)
+		if err != nil {
+			if err.Error() == "message not found" {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found"})
+			}
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to splice sections"})
+		}
+		return c.JSON(fiber.Map{"updated": res.Updated, "noop": res.Noop, "id": messageID, "workspace_id": ws, "sections_updated": res.Sections, "chunks_reembedded": res.ChunksReembedded})
 	}
 	if req.Content == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content is required"})
