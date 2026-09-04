@@ -749,11 +749,18 @@ func chunkText(text string, maxSize int) []string {
 			break
 		}
 		chunk := string(runes[i:end])
+		// LastIndex returns a BYTE offset into chunk — convert to rune count
+		// before slicing runes[], else multibyte text panics (slice out of range).
+		// (lastSpace==-1 means no space: falls to else branch, no slicing.)
 		lastSpace := strings.LastIndex(chunk, " ")
+		lastSpaceRunes := 0
+		if lastSpace > 0 {
+			lastSpaceRunes = len([]rune(chunk[:lastSpace]))
+		}
 		if lastSpace > maxSize/2 {
-			chunk = string(runes[i : i+lastSpace])
+			chunk = string(runes[i : i+lastSpaceRunes])
 			chunks = append(chunks, chunk)
-			i += lastSpace + 1 // skip the space
+			i += lastSpaceRunes + 1 // skip the space
 		} else {
 			chunks = append(chunks, chunk)
 			i = end
