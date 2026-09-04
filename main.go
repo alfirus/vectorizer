@@ -72,6 +72,10 @@ func main() {
 		embedService = embedding.NewWithDimensions(cfg.LmStudioURL, "", cfg.EmbedModel, cfg.EmbedDimensions)
 	}
 	fmt.Printf("  Embedding dimensions: %d\n", cfg.EmbedDimensions)
+	// Backpressure guards (slow local models): collapse concurrent duplicate
+	// embeds into one in-flight call, cap total in-flight embeds at
+	// EMBED_MAX_INFLIGHT so bursts queue in-process, not inside LM Studio.
+	embedService = embedding.WrapGate(embedding.WrapDedup(embedService))
 
 	// Initialize store
 	vecStore := store.New(chromaClient, embedService)

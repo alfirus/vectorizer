@@ -1,12 +1,14 @@
 package llmbrain
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
+
+	"github.com/alfirus/vectorizer/internal/httpx"
 )
 
 // Service handles optional LLM-powered summarization and Q&A per agent.
@@ -14,7 +16,40 @@ type Service struct {
 	baseURL string
 	apiKey  string
 	model   string
-	client  *http.Client
+	client  *http.Client  // legacy direct client (kept for compat)
+	retry   *httpx.Client // backpressure-aware client (timeouts + Retry-After)
+	sem     chan struct{} // cap on concurrent LM calls (slow local models queue)
+}
+
+// brainConcurrency reads LLM_MAX_INFLIGHT (default 2 — chat models are slow;
+// TagVaultChunk fan-out + deriver + rerank share this budget).
+func brainConcurrency() int {
+	if v := os.Getenv("LLM_MAX_INFLIGHT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 2
+}
+
+// llmTimeoutFromEnv reads LLM_TIMEOUT_SECS (default 600s — local chat models
+// are slower than embedders; the old hardcoded 10min stays the default).
+func llmTimeoutFromEnv() time.Duration {
+	if v := os.Getenv("LLM_TIMEOUT_SECS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 10 * time.Minute
+}
+
+func llmRetriesFromEnv() int {
+	if v := os.Getenv("LLM_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 2
 }
 
 func New(baseURL, apiKey, model string) *Service {
@@ -23,8 +58,15 @@ func New(baseURL, apiKey, model string) *Service {
 		apiKey:  apiKey,
 		model:   model,
 		client:  &http.Client{Timeout: 10 * time.Minute},
+		retry:   httpx.New(llmTimeoutFromEnv(), llmRetriesFromEnv()),
+		sem:     make(chan struct{}, brainConcurrency()),
 	}
 }
+
+// acquire blocks until a brain slot frees up — this is the backpressure valve
+// that keeps TagVaultChunk fan-out + deriver + rerank from flooding LM Studio.
+func (s *Service) acquire() { s.sem <- struct{}{} }
+func (s *Service) release() { <-s.sem }
 
 // SummarizeRequest is a summarization request.
 type SummarizeRequest struct {
@@ -140,41 +182,17 @@ func (s *Service) Ask(question string, context string) (*QAResponse, error) {
 	return &QAResponse{Answer: result.Choices[0].Message.Content}, nil
 }
 
-// doJSON performs an HTTP request and returns the response body as JSON bytes.
+// doJSON performs an HTTP request with backpressure-aware retries
+// (per-attempt timeout, Retry-After honoring, exponential backoff).
+// The semaphore caps concurrent LM calls so a burst of tag/rerank/derive
+// work queues in-process (cheap) instead of inside LM Studio (expensive).
 func (s *Service) doJSON(method, path string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request body: %w", err)
-		}
-		reqBody = bytes.NewReader(data)
-	}
-
+	s.acquire()
+	defer s.release()
 	url := s.baseURL + path
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	headers := map[string]string{}
 	if s.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.apiKey)
+		headers["Authorization"] = "Bearer " + s.apiKey
 	}
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	return bodyBytes, nil
+	return s.retry.DoJSON(method, url, body, headers)
 }

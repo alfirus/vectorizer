@@ -1,11 +1,14 @@
 package chromadb
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/alfirus/vectorizer/internal/httpx"
 )
 
 // Client is a ChromaDB v2 API client.
@@ -14,14 +17,27 @@ type Client struct {
 	Tenant     string
 	Database   string
 	httpClient *http.Client
+	retry      *httpx.Client // timeouts + retries (Chroma usually local, but long upserts can stall)
+}
+
+// chromaTimeoutFromEnv reads CHROMA_TIMEOUT_SECS (default 120s).
+func chromaTimeoutFromEnv() time.Duration {
+	if v := os.Getenv("CHROMA_TIMEOUT_SECS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 120 * time.Second
 }
 
 func New(baseURL, tenant, database string) *Client {
+	timeout := chromaTimeoutFromEnv()
 	return &Client{
 		BaseURL:    baseURL,
 		Tenant:     tenant,
 		Database:   database,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: timeout},
+		retry:      httpx.New(timeout, 2),
 	}
 }
 
@@ -313,37 +329,7 @@ func (c *Client) Heartbeat() error {
 	return err
 }
 
-// doJSON performs an HTTP request and returns the response body as JSON bytes.
+// doJSON performs an HTTP request with timeout + retries.
 func (c *Client) doJSON(method, url string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request body: %w", err)
-		}
-		reqBody = bytes.NewReader(data)
-	}
-
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	return bodyBytes, nil
+	return c.retry.DoJSON(method, url, body, nil)
 }

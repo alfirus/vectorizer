@@ -1,11 +1,11 @@
 package embedding
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+
+	"github.com/alfirus/vectorizer/internal/httpx"
 )
 
 // GoogleService handles text-to-embedding conversion via Google AI Studio API.
@@ -13,7 +13,8 @@ type GoogleService struct {
 	apiKey     string
 	model      string
 	dimensions int
-	client     *http.Client
+	client     *http.Client  // legacy (kept for compat)
+	retry      *httpx.Client // timeouts + retries
 }
 
 func NewGoogle(apiKey, model string, dimensions int) *GoogleService {
@@ -25,6 +26,7 @@ func NewGoogle(apiKey, model string, dimensions int) *GoogleService {
 		model:      model,
 		dimensions: dimensions,
 		client:     &http.Client{},
+		retry:      httpx.New(timeoutFromEnv(), retriesFromEnv()),
 	}
 }
 
@@ -150,35 +152,5 @@ func (s *GoogleService) EmbedSingle(text string) ([]float32, error) {
 }
 
 func (s *GoogleService) doJSON(method, url string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request body: %w", err)
-		}
-		reqBody = bytes.NewReader(data)
-	}
-
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	return bodyBytes, nil
+	return s.retry.DoJSON(method, url, body, nil)
 }

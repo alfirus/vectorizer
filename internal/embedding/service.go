@@ -1,11 +1,14 @@
 package embedding
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/alfirus/vectorizer/internal/httpx"
 )
 
 // Service handles text-to-embedding conversion via external providers (Qwen3 1536d MRL).
@@ -14,22 +17,47 @@ type Service struct {
 	apiKey     string
 	model      string
 	dimensions int
-	client     *http.Client
+	retry      *httpx.Client // backpressure-aware client (timeouts + Retry-After)
+}
+
+// timeoutFromEnv reads EMBED_TIMEOUT_SECS (default 300s for slow local models).
+func timeoutFromEnv() time.Duration {
+	if v := os.Getenv("EMBED_TIMEOUT_SECS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 5 * time.Minute
+}
+
+func retriesFromEnv() int {
+	if v := os.Getenv("EMBED_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 2
+}
+
+func newRetryClient() *httpx.Client {
+	return httpx.New(timeoutFromEnv(), retriesFromEnv())
 }
 
 func New(baseURL, apiKey, model string) *Service {
 	return &Service{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		model:   model,
+		baseURL:    baseURL,
+		apiKey:     apiKey,
+		model:      model,
 		dimensions: 1536,
-		client:  &http.Client{},
+		retry:      newRetryClient(),
 	}
 }
 
 func NewWithDimensions(baseURL, apiKey, model string, dimensions int) *Service {
-	if dimensions <= 0 { dimensions = 1536 }
-	return &Service{baseURL: baseURL, apiKey: apiKey, model: model, dimensions: dimensions, client: &http.Client{}}
+	if dimensions <= 0 {
+		dimensions = 1536
+	}
+	return &Service{baseURL: baseURL, apiKey: apiKey, model: model, dimensions: dimensions, retry: newRetryClient()}
 }
 
 func (s *Service) Model() string { return s.model }
@@ -50,8 +78,8 @@ func (s *Service) Embed(texts []string) ([]EmbeddingResult, error) {
 	}
 
 	body := map[string]interface{}{
-		"model": s.model,
-		"input": texts,
+		"model":      s.model,
+		"input":      texts,
 		"dimensions": s.dimensions,
 	}
 
@@ -93,41 +121,13 @@ func (s *Service) EmbedSingle(text string) ([]float32, error) {
 	return results[0].Vector, nil
 }
 
-// doJSON performs an HTTP request and returns the response body as JSON bytes.
+// doJSON performs an HTTP request with backpressure-aware retries
+// (per-attempt timeout, Retry-After honoring, exponential backoff).
 func (s *Service) doJSON(method, path string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request body: %w", err)
-		}
-		reqBody = bytes.NewReader(data)
-	}
-
 	url := s.baseURL + path
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	headers := map[string]string{}
 	if s.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.apiKey)
+		headers["Authorization"] = "Bearer " + s.apiKey
 	}
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	return bodyBytes, nil
+	return s.retry.DoJSON(method, url, body, headers)
 }
