@@ -91,6 +91,8 @@ make build && ./vectorizer.exe
 
 ### Option C: Server Deployment (Live)
 
+Runs on `ns539881` (`139.99.131.127`, Tailscale `100.90.123.105`). SSH as `ubuntu` (never root) with key `~/.ssh/personal`.
+
 ```bash
 # On server (139.99.131.127)
 git clone https://github.com/alfirus/vectorizer.git /opt/vectorizer
@@ -99,25 +101,32 @@ cd /opt/vectorizer
 # Create .env with Tailscale LM Studio URL and API token
 cat > .env << 'EOF'
 PORT=8091
-DEFAULT_API_KEY=vectorizer-local-key
+DEFAULT_API_KEY=[REDACTED]
 CHROMA_HOST=chromadb
 CHROMA_PORT=8000
 EMBED_PROVIDER=openai-compatible
 EMBED_MODEL=text-embedding-nomic-embed-text-v2
 EMBED_DIMENSIONS=768
 LM_STUDIO_URL=http://100.121.188.113:1234/v1
-LM_STUDIO_API_KEY=sk-lm-YOUR_TOKEN_HERE
+LM_STUDIO_API_KEY=[REDACTED]
 OAI_COMPATIBLE_URL=http://100.121.188.113:1234/v1
 LLM_ENABLED=true
 LLM_PROVIDER=lm-studio
 LLM_MODEL=qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive
-LLM_API_KEY=sk-lm-YOUR_TOKEN_HERE
+LLM_API_KEY=[REDACTED]
+RAG_MAX_DISTANCE=0.78
+RAG_MIN_SCORE=0.22
 LIBRARIAN_MODE=workflow
 VAULT_ROOT=/data/ai
+ALERT_EMAIL_TO=alfirus@gmail.com
 EOF
 
-# Start with ChromaDB on port 8102 (separate from aict's 8100)
+# Start everything (Vectorizer :8091 + ChromaDB 127.0.0.1:8102 + Dashboard 127.0.0.1:8092)
 docker compose -f docker-compose.server.yml up -d
+
+# Verify (vectorizer is the only public port; dashboard/chroma are server-local)
+curl http://100.90.123.105:8091/api/v1/health
+# {"status":"ok","chromadb":"ok","embedding_model":"text-embedding-nomic-embed-text-v2",...}
 
 # Import vault data
 python3 scripts/vault_index.py --workspace maisarah
@@ -226,7 +235,11 @@ services:
     image: chromadb/chroma:1.0.0
     container_name: vectorizer-chromadb
     ports: ["127.0.0.1:8102:8000"]  # 8102 to avoid conflict with aict's 8100
-    volumes: [chroma_data:/chroma/chroma]
+    # ⚠️ MUST mount at /data. Chroma 1.0.0's baked-in /config.yaml sets
+    # persist_path: "/data", which OVERRIDES the PERSIST_DIRECTORY env.
+    # Mounting at /chroma/chroma leaves an empty decoy volume and vectors
+    # live in the container layer — a recreate wipes everything.
+    volumes: [chroma_data:/data]
     restart: unless-stopped
 
   dashboard:
@@ -292,11 +305,12 @@ chmod 777 /opt/vectorizer/vault-data/maisarah/vault/00-index/
 
 | Job | Schedule | Where | What |
 |-----|----------|-------|------|
-| `vectorizer-reindex-1h` | `0 * * * *` (hourly) | Hermes `origin` | `vectorizer_reindex.py` → `vault_index.py` diff embed 768d; failures alert via Telegram DM + email |
-| `vectorizer-backup-daily` | `0 3 * * *` (03:00) | Hermes `origin` | `vectorizer_backup.py` → `SynologyDrive/ai/backups/vectorizer/chroma-YYYY-MM-DD.tar.gz` + `GRAPH.json/MEMORY_INDEX.json`, prune `+7d` (keep 7 days) |
-| `vectorizer-health-5m` | `*/5 * * * *` | Hermes `origin` | `vectorizer_healthcheck.py` probes `8091/health + 8102/heartbeat + 8092/ + 1234/v1/models`; auto `docker restart` |
+| `vectorizer-backup-daily` | `0 3 * * *` (03:00) | Hermes `origin` | `vectorizer_backup.py` → SSH `docker exec` tar of live `/data` in chromadb container → `SynologyDrive/ai/backups/vectorizer/chroma-YYYY-MM-DD.tar.gz` + per-workspace `MEMORY_INDEX.<ws>` snapshots, prune `+7d` |
+| `vectorizer-health-1h` | `0 * * * *` (hourly) | Hermes `origin` | `vectorizer_healthcheck.py` probes `:8091/health` over Tailscale + `:8092/` and `:8102/heartbeat` via SSH; auto-heal = SSH `docker compose restart`, email alert |
 | `deriver` | `2s/5msg` ticker | Inside `vectorizer` | `Summarize("Extract 1-3 facts" + text[:8000]) → CreateConclusion + AddReasoningEdge` on `POST /messages` |
 | `dreamer` | `3h` ticker | Inside `vectorizer` | `ListWorkspaces→ListSessions→GetMessages(20)` surprisal `<0.15` skip → `CreateConclusion(source:dreamer)` |
+
+> Laptop `localhost:8091` is dead — nothing runs locally. Both Hermes scripts reach the server over Tailscale (`100.90.123.105`, SSH `ubuntu` + `~/.ssh/personal`).
 
 ## Configuration
 
@@ -322,6 +336,7 @@ All settings via `.env` file or environment variables. Key options:
 | `RAG_MAX_DISTANCE` | `0.78` | Relevance floor — hits with cosine distance above this are dropped |
 | `RAG_MIN_SCORE` | `0.22` | Same gate as absolute score (`1 − distance`); either knob tunes recall vs precision |
 | `VAULT_ROOT` | `/data/ai` | Vault mount inside Docker |
+| `ALERT_EMAIL_TO` | *(empty)* | Health-alert recipient (used by `vectorizer_healthcheck.py`, default `alfirus@gmail.com`) |
 
 ## API Reference
 
