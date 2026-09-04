@@ -1,13 +1,27 @@
 package handlers
 
 import (
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/alfirus/vectorizer/internal/llmbrain"
+	"github.com/alfirus/vectorizer/internal/models"
 	"github.com/alfirus/vectorizer/internal/store"
 )
+
+// scoreOf returns the best (highest) score in a result set, 0 when empty.
+func scoreOf(results []models.SearchResult) float64 {
+	best := 0.0
+	for _, r := range results {
+		if r.Score > best {
+			best = r.Score
+		}
+	}
+	return best
+}
 
 type BrainHandler struct {
 	brain *llmbrain.Service
@@ -97,9 +111,30 @@ func (h *BrainHandler) Ask(c *fiber.Ctx) error {
 	if ctx == "" && (req.WorkspaceID != "" || req.SessionID != "") {
 		results, err := h.store.Search(req.Question, req.WorkspaceID, req.SessionID, "", 5)
 		if err == nil {
+			// Relevance floor: never build context from noise. Chroma cosine
+			// distance above minRelevantDistance means "no good hit" — abstain
+			// instead of letting the LLM confabulate from junk (e.g. identity
+			// docs in the wrong workspace). Tunable via RAG_MIN_SCORE.
+			const defaultMinScore = 0.22 // score = 1 - distance, nomic-768d
+			minScore := defaultMinScore
+			if v := os.Getenv("RAG_MIN_SCORE"); v != "" {
+				if f, ferr := strconv.ParseFloat(v, 64); ferr == nil {
+					minScore = f
+				}
+			}
 			var parts []string
 			for _, r := range results {
-				parts = append(parts, r.Document)
+				if r.Score >= minScore {
+					parts = append(parts, r.Document)
+				}
+			}
+			if len(parts) == 0 {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+					"error":          "no relevant context found",
+					"best_score":     scoreOf(results),
+					"min_score":      minScore,
+					"suggestion":     "try another workspace, rephrase, or reindex the vault",
+				})
 			}
 			ctx = strings.Join(parts, "\n")
 		}
