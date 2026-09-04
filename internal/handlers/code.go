@@ -28,10 +28,12 @@ type CodeHandler struct{ store *store.Store }
 func NewCodeHandler(s *store.Store) *CodeHandler { return &CodeHandler{store: s} }
 
 // vecignore: always skip these dirs/names (plus .gitignore basenames).
+// exports/ holds vault JSON dumps (memory content, NOT code) — never index.
 var codeSkipDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true, "__pycache__": true,
 	".venv": true, "venv": true, "dist": true, "build": true, ".next": true,
 	"target": true, ".idea": true, ".vscode": true, "bin": true, "obj": true,
+	"exports": true,
 }
 
 const maxCodeFileBytes = 500 * 1024 // skip generated monsters
