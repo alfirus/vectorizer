@@ -21,13 +21,17 @@ Now with **markdown vault + file-graph + workflow librarian** — truth is markd
 - **Peers + peer cards** — `POST /workspaces/:id/peers`, `PUT /peers/:peer_id/card`
 - **Agentic dialectic chat** — `POST /workspaces/:id/chat` (observer/observed, `reasoning_level` none/low/medium/high/max, 5 tools: `search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`, SSE streaming)
 - **Reasoning graph + deriver** — `ws_<id>_reasoning` (premise edges, BFS `GetReasoningChain`), async deriver `2s/5msg` batch → `summarize→CreateConclusion+AddReasoningEdge`
+- **Provenance + hygiene** — `GET /conclusions/trace` (why-believe forward / blast-radius reverse, BFS ≤10), `GET /conclusions/stale` (dead-knowledge proposals: old, never-referenced, non-timeless — nothing auto-deleted), `GET /conclusions/brief` (one-shot session-start overview: stats + representation + recent + top entities)
+- **Section splice updates** — `PUT /messages/:id {sections: {"Heading": "new body"}}` rewrites only named `##` sections, re-embeds only changed chunks, stable message ID (trace edges survive); `noop:true` on identical retry
+- **Identifier-aware BM25** — `LexTokens` splits `camelCase/snake_case/kebab/digit` boundaries (`RAG_MIN_SCORE→rag|min|score`, `GetMessageChunks→get|message|chunks`) while keeping `utf8/phi4/4B`-style tokens glued — code-heavy vault notes actually searchable
+- **Codebase indexing mode** — `POST /code/index {path}` walks a server-local repo (skip dirs + `.gitignore`, 500KB cap, per-file sha hash-skip) into a `code_<repo>` workspace: per-symbol chunks + DEFINES/CALLS/IMPORTS reasoning edges → `GET /code/symbols` + `GET /code/callers?symbol=X` ("what calls X" without grep); mount repo read-only in compose (`/opt/vectorizer:/data/repo:ro`)
 - **Conclusions + representations + surprisal dreamer** — offline `summarize→embed 768d→ws_<id>_conclusions` every `3h` with surprisal gate (`distance <0.15` skip)
 - **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A via `/chat/completions` with **10-minute timeout** (for large models like Qwen3.6-35B-A3B) — reserved for Deriver/Dreamer/Chat synthesis, not tagging; requires LM Studio API token
 - **Embedder interface** — pluggable `embedding.Embedder` abstraction; swap providers without changing callers
 - **Auth** — `X-API-Key` or JWT `w/p/ad` (`AUTH_USE_AUTH`, `scripts/generate_jwt/main.go`)
 - **Layered config** — `env > .env > config.toml > defaults` (`config.toml.example`, `BurntSushi/toml`)
 - **Docker-ready** — one `docker compose up` (Chroma `1.0.0`, healthchecks)
-- **MCP + Skills + SDKs** — `mcp-remote` (13 tools + `vectorizer_chat`), `skills/vectorizer`, `@vectorizer/sdk` / `vectorizer-ai`
+- **MCP + Skills + SDKs** — `mcp-remote` (25 tools: 8 messages + 5 brain + 3 provenance + 3 code + 3 peers + 6 workspace — `vectorizer_chat` included), `skills/vectorizer`, `@vectorizer/sdk` / `vectorizer-ai`
 - **Evals** — `go run ./evals/run.go -file evals/data/sample.jsonl` (LongMemEval-style `recall` + `reasoning-grounded` via chat)
 
 ## Architecture
@@ -206,6 +210,7 @@ services:
       VAULT_ROOT: /data/ai
     volumes:
       - /opt/vectorizer/vault-data:/data/ai  # writable for MEMORY_INDEX.json
+      - /opt/vectorizer:/data/repo:ro  # read-only repo mount for POST /code/index
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -314,6 +319,8 @@ All settings via `.env` file or environment variables. Key options:
 | `LLM_MODEL` | `qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive` | LLM model for brain |
 | `LLM_API_KEY` | *(empty)* | LM Studio API token (same as `LM_STUDIO_API_KEY`) |
 | `LIBRARIAN_MODE` | `workflow` | Librarian: `workflow` (code tagging+rerank <10ms, default) or `hybrid` (workflow + AI 1.5s cap) |
+| `RAG_MAX_DISTANCE` | `0.78` | Relevance floor — hits with cosine distance above this are dropped |
+| `RAG_MIN_SCORE` | `0.22` | Same gate as absolute score (`1 − distance`); either knob tunes recall vs precision |
 | `VAULT_ROOT` | `/data/ai` | Vault mount inside Docker |
 
 ## API Reference
@@ -461,6 +468,58 @@ Content-Type: application/json
 }
 ```
 
+**Relevance:** `Ask` applies the same `RAG_MAX_DISTANCE` / `RAG_MIN_SCORE` floor as search — when no hit passes, it **abstains** (`"I don't have that in memory"`) instead of confabulating. Timeless facts (`role: system`, `importance ≥ 4`) bypass the floor.
+
+### Splice Sections (Partial Update)
+
+```bash
+PUT /api/v1/messages/:id
+Content-Type: application/json
+
+{
+  "workspace_id": "family",
+  "sections": {"Alpha": "Rewritten version of the ## Alpha section."}
+}
+```
+
+Replaces only the named `##` H2 sections, re-embeds only the changed chunks, keeps the same message ID (reasoning edges survive). Matching is whitespace-insensitive and idempotent — identical retry returns `{"noop": true}`. Full-body replace still works via `{"content": "..."}`.
+
+### Provenance — Trace / Stale / Brief
+
+```bash
+# Why does the system believe X? (forward) / what breaks if Y changes? (reverse)
+GET /api/v1/conclusions/trace?workspace_id=family&id=<conclusion-id>&direction=forward
+# → {"id","direction","count","nodes":[{"id","kind","depth","via"}]} — BFS ≤ 10, cycle-safe
+
+# Dead knowledge: old + never referenced + non-timeless → proposals only, nothing auto-deleted
+GET /api/v1/conclusions/stale?workspace_id=family&older_than_days=90
+# → {"count","candidates":[{"id","title","age_days"}]}
+
+# One-shot session-start overview
+GET /api/v1/conclusions/brief?workspace_id=family
+# → stats + representation + recent activity + top entities (+ optional stale sample)
+```
+
+### Codebase Index — Symbols / Callers
+
+`POST /code/index` walks a **server-local** path (the container only sees its mounts — use `/data/repo/...` when the repo is mounted read-only). Indexes overview + per-symbol chunks with DEFINES/CALLS/IMPORTS reasoning edges.
+
+```bash
+POST /api/v1/code/index
+Content-Type: application/json
+
+{"path": "/data/repo/internal/store", "workspace_id": "code_vectorizer"}
+# → {"workspace_id","files_indexed":14,"files_skipped_unchanged":0,"symbols":106,"edges":302}
+
+# What calls UpdateMessage? (structural — no grep)
+GET /api/v1/code/callers?workspace_id=code_vectorizer&symbol=UpdateMessageSections
+# → {"symbol","callers":[...],"count":9}
+
+# Symbols in a file
+GET /api/v1/code/symbols?workspace_id=code_vectorizer&file=trace.go
+# → {"symbols":[{"name","kind","signature"}],...}
+```
+
 ## Authentication
 
 Set `DEFAULT_API_KEY` in `.env` to enable API key authentication:
@@ -540,16 +599,20 @@ vectorizer/
 │   ├── store/
 │   │   ├── store.go  # Store + Vault librarian
 │   │   ├── graph.go  # File-graph (GRAPH.json, Expand 1-hop)
-│   │   ├── workflow_rerank.go
+│   │   ├── workflow_rerank.go  # WorkflowRerankScore (incl. LexTokens identifier-split BM25)
+│   │   ├── sections.go  # SpliceSections (H2 splice, whitespace-insensitive, idempotent)
+│   │   ├── query_metadata.go  # QueryByMetadata (no-embed filter lookup, used by code hash-skip)
 │   │   ├── reasoning.go, scopes.go, keys.go, conclusions.go, peers.go
+│   ├── codeindex/   # Codebase indexing (regex extractor go/py/ts, walk+hash-skip, CallEdges)
+│   │   ├── extractor.go, extractor_test.go, README.md
 │   ├── deriver/      # Async deriver 2s/5msg
 │   ├── dreamer/      # Surprisal dreamer 3h
-│   ├── handlers/     # Workspaces, messages, peers, chat
+│   ├── handlers/     # Workspaces, messages (GET/DELETE/PUT + sections), code, peers, chat
 │   ├── models/       # Workspace, Session, Message, Peer, PeerCard, SearchRequest
 │   ├── grpc/         # gRPC server
 │   ├── security/     # JWT
 │   └── webhooks/     # Webhook manager
-├── mcp/              # MCP proxy (13 tools)
+├── mcp/              # MCP proxy (25 tools: messages×8, brain×5, provenance×3, code×3, peers×3, workspace×6)
 ├── skills/           # Skills
 ├── sdks/             # TS + Python SDKs
 ├── evals/            # Eval harness
