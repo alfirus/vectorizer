@@ -324,6 +324,11 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Get("/conclusions", conclHandler.List)
 	api.Delete("/conclusions/:id", conclHandler.Delete)
 	api.Get("/representations", conclHandler.Representation)
+	// Provenance + hygiene: trace (why-believe / blast-radius), stale
+	// (dead-knowledge review proposals), brief (one-shot session overview).
+	api.Get("/conclusions/trace", conclHandler.Trace)
+	api.Get("/conclusions/stale", conclHandler.Stale)
+	api.Get("/conclusions/brief", conclHandler.Brief)
 
 	// Scopes ()
 	scopesH := handlers.NewScopesHandler(vecStore)

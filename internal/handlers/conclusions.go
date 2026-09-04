@@ -50,3 +50,64 @@ func (h *ConclusionsHandler) Query(c *fiber.Ctx) error {
 	results,_:=h.store.QueryConclusions(req.WorkspaceID, req.Query, req.N)
 	return c.JSON(fiber.Map{"results":results})
 }
+
+// Trace walks memory provenance. direction=forward answers "why do I
+// believe X?" (conclusion → premises → supporting messages); direction=
+// reverse answers "what breaks if I forget X?" (blast radius: every
+// conclusion transitively depending on the target). Bounded BFS, no cycles.
+func (h *ConclusionsHandler) Trace(c *fiber.Ctx) error {
+	ws := c.Query("workspace_id")
+	id := c.Query("id")
+	if ws == "" || id == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "workspace_id and id required"})
+	}
+	dir := c.Query("direction", "forward")
+	depth, _ := strconv.Atoi(c.Query("depth", "5"))
+	var (
+		nodes []store.TraceResult
+		err   error
+	)
+	if dir == "reverse" {
+		nodes, err = h.store.TraceReverse(ws, id, depth)
+	} else {
+		nodes, err = h.store.TraceForward(ws, id, depth)
+	}
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "trace failed"})
+	}
+	return c.JSON(fiber.Map{"direction": dir, "id": id, "nodes": nodes, "count": len(nodes)})
+}
+
+// Stale runs the dead-knowledge scan: old, never-reinforced,
+// non-timeless memories proposed for review. Scan proposes, human disposes —
+// nothing is deleted here; confirm via DELETE /messages/:id or TTL.
+func (h *ConclusionsHandler) Stale(c *fiber.Ctx) error {
+	ws := c.Query("workspace_id")
+	if ws == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "workspace_id required"})
+	}
+	maxAge, _ := strconv.Atoi(c.Query("max_age_days", "90"))
+	limit, _ := strconv.Atoi(c.Query("limit", "50"))
+	cands, err := h.store.ScanStale(ws, maxAge, limit)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "stale scan failed"})
+	}
+	return c.JSON(fiber.Map{"workspace_id": ws, "candidates": cands, "count": len(cands)})
+}
+
+// Brief returns the one-shot session-start overview: stats + representation
+// + recent conclusions + top entities (+ optional stale count) in a single
+// call, instead of 3+ round trips.
+func (h *ConclusionsHandler) Brief(c *fiber.Ctx) error {
+	ws := c.Query("workspace_id")
+	if ws == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "workspace_id required"})
+	}
+	max, _ := strconv.Atoi(c.Query("max_conclusions", "10"))
+	includeStale := c.Query("include_stale", "false") == "true"
+	b, err := h.store.GetBrief(ws, c.Query("peer_id"), max, includeStale)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "brief failed"})
+	}
+	return c.JSON(b)
+}

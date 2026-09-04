@@ -2,7 +2,7 @@
 
 Teach agents to use Vectorizer (self-hosted, 768d `nomic-embed-text-v2` via LM Studio, workspace-isolated ChromaDB `ws_<id>`).
 
-## When to use MCP tools (16 total: 8 messages + 2 brain + 3 peers + 3 workspace)
+## When to use MCP tools (22 total: 8 messages + 5 brain + 3 peers + 3 workspace + 3 provenance)
 - **After every user/assistant turn:** `vectorizer_add_message {workspace_id, session_id, role, content}` (auto-chunks 4000, embeds 768d)
 - **Before answering any question:** `vectorizer_search {query, workspace_id, n_results:5}` — inject top results into prompt. Scoped searches ALSO see the shared `_global` workspace (identity facts live there).
 - **Long context / recap:** `vectorizer_summarize {workspace_id, session_id}` or `vectorizer_list_messages {workspace_id, session_id}`
@@ -14,6 +14,11 @@ Teach agents to use Vectorizer (self-hosted, 768d `nomic-embed-text-v2` via LM S
 - `vectorizer_delete_message {id, workspace_id?}` — forget: deletes ALL chunks
 - `vectorizer_update_message {id, content, workspace_id?, session_id?, role?}` — correct in place (same ID, fresh embedding; role/session recovered from stored chunks when omitted)
 - Conclusions: `DELETE /api/v1/conclusions/:id?workspace_id=...`
+
+## Provenance + hygiene (new 2026-09)
+- `vectorizer_trace {workspace_id, id, direction: forward|reverse, depth?}` — forward = "why do I believe X?" (conclusion → premises → messages); reverse = "what breaks if I forget X?" (blast radius). Check reverse BEFORE deleting anything.
+- `vectorizer_stale {workspace_id, max_age_days?, limit?}` — dead-knowledge proposals (old, never-reinforced, non-timeless). Review, then confirm via delete/TTL. Nothing auto-deletes.
+- `vectorizer_brief {workspace_id, peer_id?, max_conclusions?, include_stale?}` — one-shot session-start overview (stats + repr + recent + entities). Use this instead of 3 separate calls.
 
 ## Relevance rules (2026-09: floors everywhere)
 - `Ask` / chat seed / `search_memory` / `search_messages` all enforce `RAG_MIN_SCORE` (default 0.22, score = 1 − distance). Below floor = abstain, never summarize junk.
