@@ -2,7 +2,7 @@
 
 Teach agents to use Vectorizer (self-hosted, 768d `nomic-embed-text-v2` via LM Studio, workspace-isolated ChromaDB `ws_<id>`).
 
-## When to use MCP tools (22 total: 8 messages + 5 brain + 3 peers + 3 workspace + 3 provenance)
+## When to use MCP tools (25 total: 8 messages + 5 brain + 3 provenance + 3 code + 3 peers + 6 workspace)
 - **After every user/assistant turn:** `vectorizer_add_message {workspace_id, session_id, role, content}` (auto-chunks 4000, embeds 768d)
 - **Before answering any question:** `vectorizer_search {query, workspace_id, n_results:5}` — inject top results into prompt. Scoped searches ALSO see the shared `_global` workspace (identity facts live there).
 - **Long context / recap:** `vectorizer_summarize {workspace_id, session_id}` or `vectorizer_list_messages {workspace_id, session_id}`
@@ -13,7 +13,14 @@ Teach agents to use Vectorizer (self-hosted, 768d `nomic-embed-text-v2` via LM S
 - `vectorizer_get_message {id, workspace_id?}` — fetch all chunks for a message
 - `vectorizer_delete_message {id, workspace_id?}` — forget: deletes ALL chunks
 - `vectorizer_update_message {id, content, workspace_id?, session_id?, role?}` — correct in place (same ID, fresh embedding; role/session recovered from stored chunks when omitted)
+- `vectorizer_update_message {id, sections: {"Heading": "new body"}, workspace_id?}` — SPLICE: rewrite only named `##` sections, re-embeds only changed chunks, ID stable (trace edges survive). Prefer splice over full rewrite for long docs.
 - Conclusions: `DELETE /api/v1/conclusions/:id?workspace_id=...`
+
+## Codebase Q&A (new 2026-09 — structural, no grep)
+- `vectorizer_index_repo {path, workspace_id?}` — index a server-local repo path (container sees `/data/...` mounts; `/data/repo` = vectorizer source). Per-symbol chunks + DEFINES/CALLS/IMPORTS reasoning edges.
+- `vectorizer_symbols {workspace_id, file?}` — symbols in a file (name, kind, signature).
+- `vectorizer_callers {workspace_id, symbol}` — "what calls X?" from CALLS edges. Use before refactoring.
+- Pitfall: reasoning-chain responses nest fields under `metadata` (`e["metadata"]["premise_ids"]`, NOT `e["premise_ids"]`).
 
 ## Provenance + hygiene (new 2026-09)
 - `vectorizer_trace {workspace_id, id, direction: forward|reverse, depth?}` — forward = "why do I believe X?" (conclusion → premises → messages); reverse = "what breaks if I forget X?" (blast radius). Check reverse BEFORE deleting anything.
