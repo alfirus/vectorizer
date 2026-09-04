@@ -87,3 +87,19 @@ func TestSelfIndex(t *testing.T) {
 		t.Errorf("self-index found only %d symbols", len(fs.Symbols))
 	}
 }
+
+func TestCallEdgesCaseInsensitive(t *testing.T) {
+	files := []FileSymbols{
+		{Path: "a.go", Language: "go", Symbols: []Symbol{
+			{Name: "UpdateMessage", Body: "func UpdateMessage() { GetMessageChunks() }"},
+			{Name: "GetMessageChunks", Body: "func GetMessageChunks() { return nil }"},
+		}},
+	}
+	edges := CallEdges(files)
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d: %+v", len(edges), edges)
+	}
+	if edges[0].Caller != "UpdateMessage" || edges[0].Callee != "GetMessageChunks" {
+		t.Fatalf("wrong edge: %+v", edges[0])
+	}
+}

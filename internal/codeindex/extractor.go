@@ -302,10 +302,14 @@ type CallEdge struct {
 // symbol's body. Excludes self-calls. Prototype-grade: no scope resolution,
 // stdlib-blind by construction (only known symbols match).
 func CallEdges(files []FileSymbols) []CallEdge {
-	known := map[string]bool{}
+	// known maps lowercase token -> canonical symbol name (matching is
+	// case-insensitive: SplitTokens lowercases, definitions don't).
+	known := map[string]string{}
 	for _, f := range files {
 		for _, s := range f.Symbols {
-			known[s.Name] = true
+			if _, ok := known[strings.ToLower(s.Name)]; !ok {
+				known[strings.ToLower(s.Name)] = s.Name
+			}
 		}
 	}
 	seen := map[string]bool{}
@@ -313,15 +317,16 @@ func CallEdges(files []FileSymbols) []CallEdge {
 	for _, f := range files {
 		for _, s := range f.Symbols {
 			for _, tok := range SplitTokens(s.Body) {
-				if tok == s.Name || !known[tok] {
+				canon, ok := known[tok]
+				if !ok || canon == s.Name {
 					continue
 				}
-				key := s.Name + "\x00" + tok
+				key := s.Name + "\x00" + canon
 				if seen[key] {
 					continue
 				}
 				seen[key] = true
-				out = append(out, CallEdge{Caller: s.Name, Callee: tok, File: f.Path})
+				out = append(out, CallEdge{Caller: s.Name, Callee: canon, File: f.Path})
 			}
 		}
 	}

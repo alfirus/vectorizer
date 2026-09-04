@@ -164,14 +164,20 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 		parsed = append(parsed, j.fs)
 	}
 	for _, e := range codeindex.CallEdges(parsed) {
-		_ = h.store.AddReasoningEdge(ws, "codeindex", "calls:"+e.Caller,
-			[]string{"defines:" + e.Callee}, []string{"file:" + e.File})
+		if err := h.store.AddReasoningEdge(ws, "codeindex", "calls:"+e.Caller,
+			[]string{"defines:" + e.Callee}, []string{"file:" + e.File}); err != nil {
+			res.Errors = append(res.Errors, "edge "+e.Caller+"->"+e.Callee+": "+err.Error())
+			continue
+		}
 		res.Edges++
 	}
 	for _, j := range todo {
 		for _, imp := range j.fs.Imports {
-			_ = h.store.AddReasoningEdge(ws, "codeindex", "file:"+j.rel,
-				[]string{"imports:" + imp}, []string{"file:" + j.rel})
+			if err := h.store.AddReasoningEdge(ws, "codeindex", "file:"+j.rel,
+				[]string{"imports:" + imp}, []string{"file:" + j.rel}); err != nil {
+				res.Errors = append(res.Errors, "edge imports "+j.rel+": "+err.Error())
+				continue
+			}
 			res.Edges++
 		}
 	}
