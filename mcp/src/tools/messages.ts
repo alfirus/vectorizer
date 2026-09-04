@@ -51,4 +51,29 @@ export function registerMessageTools(server: McpServer, getClient: () => Client)
       return json(data);
     } catch (e) { return err(e); }
   });
+  server.tool("vectorizer_get_message", "Fetch a message by ID (all chunks). Omit workspace_id to scan all workspaces.", {
+    id: z.string().min(1), workspace_id: z.string().optional(),
+  }, async (a) => {
+    try {
+      const q = a.workspace_id ? `?workspace_id=${encodeURIComponent(a.workspace_id)}` : "";
+      const data = await getClient().req(`/api/v1/messages/${encodeURIComponent(a.id)}${q}`); return json(data);
+    } catch (e) { return err(e); }
+  });
+  server.tool("vectorizer_delete_message", "Forget a message: deletes ALL chunks for the ID (wrong facts must be forgettable). Omit workspace_id to scan all workspaces.", {
+    id: z.string().min(1), workspace_id: z.string().optional(),
+  }, async (a) => {
+    try {
+      const q = a.workspace_id ? `?workspace_id=${encodeURIComponent(a.workspace_id)}` : "";
+      const data = await getClient().req(`/api/v1/messages/${encodeURIComponent(a.id)}${q}`, { method: "DELETE" }); return json(data);
+    } catch (e) { return err(e); }
+  });
+  server.tool("vectorizer_update_message", "Correct a message: replaces content under the SAME id (fresh embedding + chunking). Role/session recovered from stored chunks when omitted.", {
+    id: z.string().min(1), content: z.string().min(1),
+    workspace_id: z.string().optional(), session_id: z.string().optional(),
+    role: z.enum(["user","assistant","system"]).optional(),
+  }, async (a) => {
+    try {
+      const data = await getClient().req(`/api/v1/messages/${encodeURIComponent(a.id)}`, { method: "PUT", body: JSON.stringify(a) }); return json(data);
+    } catch (e) { return err(e); }
+  });
 }

@@ -1,7 +1,7 @@
 ---
 name: vectorizer-memory
 description: Recall/record loop for Vectorizer (store→search→ask→summarize, workspace/session strategy)
-allowed-tools: [vectorizer_add_message, vectorizer_search, vectorizer_ask, vectorizer_summarize, vectorizer_list_messages]
+allowed-tools: [vectorizer_add_message, vectorizer_search, vectorizer_ask, vectorizer_summarize, vectorizer_list_messages, vectorizer_get_message, vectorizer_delete_message, vectorizer_update_message]
 ---
 # Vectorizer Memory — recall/record loop
 
