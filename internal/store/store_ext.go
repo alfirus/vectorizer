@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/alfirus/vectorizer/internal/models"
 )
 
 func (s *Store) ListWorkspaces() ([]string, error) {
@@ -36,6 +38,68 @@ func (s *Store) GetMessages(workspaceID, sessionID string, limit, offset int) ([
 		return nil, fmt.Errorf("get messages: %w", err)
 	}
 	return docs, nil
+}
+
+// DeleteMessage removes every chunk carrying message_id (all chunk_N parts).
+// Returns the number of chunks deleted. Wrong facts must be forgettable —
+// without this, a confabulated auto-stored conclusion is immortal.
+func (s *Store) DeleteMessage(workspaceID, messageID string) (int, error) {
+	collName := s.GetCollectionName(workspaceID)
+	coll, err := s.chroma.GetCollection(collName)
+	if err != nil {
+		return 0, fmt.Errorf("get collection: %w", err)
+	}
+	existing, err := s.chroma.GetDocuments(coll.ID, map[string]interface{}{"message_id": messageID}, 0, 0)
+	if err != nil {
+		return 0, fmt.Errorf("lookup chunks: %w", err)
+	}
+	if len(existing) == 0 {
+		return 0, nil
+	}
+	ids := make([]string, 0, len(existing))
+	for _, d := range existing {
+		if id, ok := d["id"].(string); ok && id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if err := s.chroma.DeleteDocuments(coll.ID, ids); err != nil {
+		return 0, fmt.Errorf("delete chunks: %w", err)
+	}
+	return len(ids), nil
+}
+
+// UpdateMessage replaces a message's content: delete all old chunks, then
+// re-add with the same message ID (fresh embedding + chunking). Returns the
+// new chunk count. This is the correction path for wrong memories.
+func (s *Store) UpdateMessage(msg *models.Message, content string) (int, error) {
+	if _, err := s.DeleteMessage(msg.WorkspaceID, msg.ID); err != nil {
+		return 0, err
+	}
+	if err := s.AddMessage(msg, content); err != nil {
+		return 0, err
+	}
+	chunks := chunkText(content, maxChunkSize)
+	return len(chunks), nil
+}
+
+// GetMessageChunks fetches every stored chunk for one message ID.
+func (s *Store) GetMessageChunks(workspaceID, messageID string) ([]map[string]interface{}, error) {
+	collName := s.GetCollectionName(workspaceID)
+	coll, err := s.chroma.GetCollection(collName)
+	if err != nil {
+		return nil, fmt.Errorf("get collection: %w", err)
+	}
+	return s.chroma.GetDocuments(coll.ID, map[string]interface{}{"message_id": messageID}, 0, 0)
+}
+
+// CountMessageChunks counts stored chunks for one message ID (cheap
+// existence probe used by workspace resolution).
+func (s *Store) CountMessageChunks(workspaceID, messageID string) (int, error) {
+	docs, err := s.GetMessageChunks(workspaceID, messageID)
+	if err != nil {
+		return 0, err
+	}
+	return len(docs), nil
 }
 
 func parseDate(s string) (time.Time, bool) {

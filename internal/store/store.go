@@ -50,13 +50,44 @@ func (s *Store) checkContentHash(collName, hash string) (bool, error) {
 	return len(results) > 0, nil
 }
 
+// decayExempt reports whether a hit must skip time-decay: system/identity
+// chunks (role=system) and explicitly pinned facts (importance>=4) are
+// timeless — decaying them lets last week's noise outrank "daughter's name".
+func decayExempt(meta map[string]interface{}) bool {
+	if meta == nil {
+		return false
+	}
+	if role, ok := meta["role"].(string); ok && role == "system" {
+		return true
+	}
+	switch v := meta["importance"].(type) {
+	case float64:
+		if v >= 4 {
+			return true
+		}
+	case int:
+		if v >= 4 {
+			return true
+		}
+	case int64:
+		if v >= 4 {
+			return true
+		}
+	}
+	return false
+}
+
 // applyTimeDecay penalizes old memories exponentially.
 // Memories older than 7 days (168 hours) get exponentially penalized.
 // This ensures recent context ranks higher in search results.
 // Pattern from aict.my ChromaDB integration.
+// Timeless facts (role=system, importance>=4) are exempt — see decayExempt.
 func applyTimeDecay(results []models.SearchResult) []models.SearchResult {
 	now := time.Now()
 	for i := range results {
+		if decayExempt(results[i].Metadata) {
+			continue
+		}
 		// Try to get created_at from metadata
 		var createdAt time.Time
 		if meta := results[i].Metadata; meta != nil {
@@ -419,10 +450,18 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 
 	var results []models.SearchResult
 	
-	// Search all workspaces if no workspace filter, otherwise search specific one
+	// Search all workspaces if no workspace filter, otherwise search specific one.
+	// Shared identity scope: a scoped search (e.g. workspace "elizabeth") ALSO
+	// pulls from the "_global" workspace collection, so facts every peer needs
+	// ("daughter's name" lives in family/global) are visible everywhere. The
+	// global hits merge, sort, and floor exactly like local ones — no special
+	// casing downstream. Scoping stays intact: only when a workspace IS named.
 	workspaces := []string{}
 	if workspaceID != "" {
 		workspaces = append(workspaces, workspaceID)
+		if workspaceID != "_global" {
+			workspaces = append(workspaces, "_global")
+		}
 	} else {
 		// List collections to find all workspaces (pattern: ws_*)
 		collections, err := s.listCollections()
@@ -433,7 +472,6 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 			workspaces = append(workspaces, strings.TrimPrefix(c.Name, "ws_"))
 		}
 	}
-
 	for _, wsID := range workspaces {
 		collName := s.GetCollectionName(wsID)
 		coll, err := s.chroma.GetCollection(collName)
@@ -441,11 +479,26 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 			continue // skip if collection doesn't exist
 		}
 
+		// Per-workspace filter copy: the shared whereFilter pins
+		// workspace_id to the caller's workspace, which would zero out the
+		// _global pass. Session scoping stays caller-only (global facts are
+		// session-independent); role/scope/peer filters apply to both.
+		wf := map[string]interface{}{"workspace_id": wsID}
+		for k, v := range whereFilter {
+			if k == "workspace_id" || k == "session_id" {
+				continue
+			}
+			wf[k] = v
+		}
+		if wsID != "_global" && sessionID != "" {
+			wf["session_id"] = sessionID
+		}
+
 		queryResults, err := s.chroma.Query(
 			coll.ID,
 			[][]float32{queryEmbedding},
 			nResults,
-			whereFilter,
+			wf,
 			[]string{"documents", "metadatas", "distances"},
 		)
 		if err != nil {

@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"os"
-	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -112,16 +110,11 @@ func (h *BrainHandler) Ask(c *fiber.Ctx) error {
 		results, err := h.store.Search(req.Question, req.WorkspaceID, req.SessionID, "", 5)
 		if err == nil {
 			// Relevance floor: never build context from noise. Chroma cosine
-			// distance above minRelevantDistance means "no good hit" — abstain
-			// instead of letting the LLM confabulate from junk (e.g. identity
-			// docs in the wrong workspace). Tunable via RAG_MIN_SCORE.
-			const defaultMinScore = 0.22 // score = 1 - distance, nomic-768d
-			minScore := defaultMinScore
-			if v := os.Getenv("RAG_MIN_SCORE"); v != "" {
-				if f, ferr := strconv.ParseFloat(v, 64); ferr == nil {
-					minScore = f
-				}
-			}
+			// distance above the floor means "no good hit" — abstain instead of
+			// letting the LLM confabulate from junk (e.g. identity docs in the
+			// wrong workspace). Shared floor with chat auto-store (minRelevantScore,
+			// tunable via RAG_MIN_SCORE).
+			minScore := minRelevantScore()
 			var parts []string
 			for _, r := range results {
 				if r.Score >= minScore {

@@ -356,3 +356,133 @@ func (h *MessagesHandler) SearchAnalytics(c *fiber.Ctx) error {
 	}
 	return c.JSON(stats)
 }
+
+// resolveMessageWorkspace finds which workspace-scoped collection holds the
+// message chunks, since chunk IDs don't encode the workspace. Scans the
+// caller's workspace first, then falls back to all workspaces.
+func (h *MessagesHandler) resolveMessageWorkspace(hint, messageID string) string {
+	candidates := []string{}
+	if hint != "" {
+		candidates = append(candidates, hint)
+	}
+	if ws, _ := h.store.ListWorkspaces(); ws != nil {
+		for _, w := range ws {
+			if w != hint {
+				candidates = append(candidates, w)
+			}
+		}
+	}
+	for _, ws := range candidates {
+		if n, err := h.store.CountMessageChunks(ws, messageID); err == nil && n > 0 {
+			return ws
+		}
+	}
+	if hint != "" {
+		return hint
+	}
+	return ""
+}
+
+// DeleteMessage removes a message (all chunks) by ID.
+// DELETE /messages/:id?workspace_id=... — workspace hint required unless the
+// ID is unique; without it we scan all workspaces (slower but safe).
+func (h *MessagesHandler) DeleteMessage(c *fiber.Ctx) error {
+	messageID := c.Params("id")
+	if messageID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "message id is required"})
+	}
+	ws := h.resolveMessageWorkspace(c.Query("workspace_id"), messageID)
+	if ws == "" {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
+	}
+	n, err := h.store.DeleteMessage(ws, messageID)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to delete message"})
+	}
+	if n == 0 {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found", "workspace_id": ws})
+	}
+	return c.JSON(fiber.Map{"deleted": true, "id": messageID, "workspace_id": ws, "chunks_deleted": n})
+}
+
+// UpdateMessageContent replaces a message's content (delete + re-add, same ID).
+// PUT /messages/:id  body: {content, workspace_id?, session_id?, role?}
+func (h *MessagesHandler) UpdateMessageContent(c *fiber.Ctx) error {
+	messageID := c.Params("id")
+	if messageID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "message id is required"})
+	}
+	var req struct {
+		Content     string                 `json:"content"`
+		WorkspaceID string                 `json:"workspace_id"`
+		SessionID   string                 `json:"session_id"`
+		Role        string                 `json:"role"`
+		Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
+	if req.Content == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content is required"})
+	}
+	req.Content = models.SanitizeString(req.Content)
+	if len(req.Content) > 100000 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content too large (max 100k chars)"})
+	}
+	ws := h.resolveMessageWorkspace(req.WorkspaceID, messageID)
+	if ws == "" {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
+	}
+	// Recover original role/session from surviving chunks when not supplied.
+	role, sessionID := req.Role, req.SessionID
+	if role == "" || sessionID == "" {
+		if docs, err := h.store.GetMessageChunks(ws, messageID); err == nil && len(docs) > 0 {
+			if meta, ok := docs[0]["metadata"].(map[string]interface{}); ok {
+				if role == "" {
+					role, _ = meta["role"].(string)
+				}
+				if sessionID == "" {
+					sessionID, _ = meta["session_id"].(string)
+				}
+			}
+		}
+	}
+	if role == "" {
+		role = "user"
+	}
+	if role != "user" && role != "assistant" && role != "system" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "role must be 'user', 'assistant', or 'system'"})
+	}
+	if sessionID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "session_id is required (not supplied and not recoverable from stored chunks)"})
+	}
+	msg := models.NewMessage(ws, sessionID, role, req.Content)
+	msg.ID = messageID // keep stable ID — chunk IDs derive from it
+	msg.Metadata = req.Metadata
+	n, err := h.store.UpdateMessage(msg, req.Content)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to update message"})
+	}
+	return c.JSON(fiber.Map{"updated": true, "id": messageID, "workspace_id": ws, "chunks": n})
+}
+
+// GetMessageByID fetches a message's chunks by ID.
+// GET /messages/:id?workspace_id=...
+func (h *MessagesHandler) GetMessageByID(c *fiber.Ctx) error {
+	messageID := c.Params("id")
+	if messageID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "message id is required"})
+	}
+	ws := h.resolveMessageWorkspace(c.Query("workspace_id"), messageID)
+	if ws == "" {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
+	}
+	docs, err := h.store.GetMessageChunks(ws, messageID)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to fetch message"})
+	}
+	if len(docs) == 0 {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found", "workspace_id": ws})
+	}
+	return c.JSON(fiber.Map{"id": messageID, "workspace_id": ws, "chunks": docs, "count": len(docs)})
+}

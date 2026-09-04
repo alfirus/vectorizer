@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -66,8 +68,12 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	if rep, _, _ := h.store.GetRepresentation(ws, observed, req.SessionID, 5); rep != "" {
 		seedCtx = append(seedCtx, "Representation:\n"+rep)
 	}
+	var seedResults []models.SearchResult
 	if results, err := h.store.Search(req.Query, ws, req.SessionID, "", nResults); err == nil {
-		for _, r := range results { seedCtx = append(seedCtx, r.Document) }
+		seedResults = results
+		for _, r := range results {
+			seedCtx = append(seedCtx, r.Document)
+		}
 	}
 	seedCtxStr := strings.Join(seedCtx, "\n\n")
 	if len(seedCtxStr) > 12000 { seedCtxStr = seedCtxStr[:12000] }
@@ -110,8 +116,12 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 		messages = append(messages, map[string]interface{}{"role": "assistant", "content": resp})
 		messages = append(messages, map[string]interface{}{"role": "user", "content": fmt.Sprintf("Tool %s result:\n%s\n\nContinue or answer.", toolName, toolResult)})
 	}
-	// Auto-store chat answer into reasoning graph + assistant message (rolling-window)
-	if answer != "" && req.SessionID != "" {
+	// Auto-store chat answer into reasoning graph + assistant message (rolling-window).
+	// Confidence gate: only persist when the seed context actually contained a
+	// relevant hit (score >= RAG_MIN_SCORE, default 0.22, same floor as Ask).
+	// Without this, answers built from junk become immortal wrong "memories"
+	// that future queries retrieve (e.g. identity-doc confabulation).
+	if answer != "" && req.SessionID != "" && seedRelevant(seedResults) {
 		// Persist as conclusion for reasoning grounding
 		newID, _ := h.store.CreateConclusion(ws, observed, answer, map[string]interface{}{"source":"chat","observer":observer,"session_id":req.SessionID})
 		if newID != "" {
@@ -122,6 +132,60 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 		_ = h.store.AddMessage(msg, answer)
 	}
 	return c.JSON(fiber.Map{"answer": answer, "observer": observer, "observed": observed})
+}
+
+// minRelevantScore is the shared relevance floor (score = 1 - distance,
+// nomic-768d): seed hits, Ask context, and chat auto-store all use it.
+// Tunable live via RAG_MIN_SCORE; default 0.22.
+func minRelevantScore() float64 {
+	const def = 0.22
+	if v := os.Getenv("RAG_MIN_SCORE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
+// seedRelevant reports whether the seed search returned at least one hit
+// above the relevance floor. Guards chat auto-store: junk-only seeds must
+// not become immortal conclusions.
+func seedRelevant(results []models.SearchResult) bool {
+	floor := minRelevantScore()
+	for _, r := range results {
+		if r.Score >= floor {
+			return true
+		}
+	}
+	return false
+}
+
+// filterToolHits drops SearchResult tool hits below the relevance floor.
+func filterToolHits(hits []models.SearchResult, floor float64) []models.SearchResult {
+	out := hits[:0]
+	for _, h := range hits {
+		if h.Score >= floor {
+			out = append(out, h)
+		}
+	}
+	if out == nil {
+		out = []models.SearchResult{}
+	}
+	return out
+}
+
+// filterToolMaps drops QueryConclusions map hits (score key) below the floor.
+func filterToolMaps(hits []map[string]interface{}, floor float64) []map[string]interface{} {
+	out := hits[:0]
+	for _, h := range hits {
+		if s, ok := h["score"].(float64); ok && s >= floor {
+			out = append(out, h)
+		}
+	}
+	if out == nil {
+		out = []map[string]interface{}{}
+	}
+	return out
 }
 
 func parseToolCall(s string) (string, map[string]interface{}) {
@@ -146,12 +210,18 @@ func (h *ChatHandler) execTool(ws, sessionID, tool string, args map[string]inter
 			// future: QueryConclusions with scope; for now search then filter
 		}
 		res,_:=h.store.QueryConclusions(ws, q, 5)
+		// Floor: drop junk conclusions so the tool loop can't build answers
+		// from noise. Empty result tells the LLM "nothing relevant" — the
+		// abstain signal.
+		res = filterToolMaps(res, minRelevantScore())
 		b,_:=json.Marshal(res); return string(b)
 	case "search_messages":
 		q,_:=args["query"].(string)
 		scope,_:=args["scope"].(string); peerID,_:=args["peer_id"].(string)
 		if sid, ok := args["session_id"].(string); ok && sid != "" { sessionID = sid }
 		res,_:=h.store.SearchWithScope(q, ws, sessionID, "", scope, peerID, 5)
+		// Same floor for message hits — junk out, abstain signal in.
+		res = filterToolHits(res, minRelevantScore())
 		b,_:=json.Marshal(res); return string(b)
 	case "grep_messages":
 		pat,_:=args["pattern"].(string); if pat=="" { pat,_=args["query"].(string) }

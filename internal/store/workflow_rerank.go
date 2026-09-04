@@ -125,6 +125,13 @@ func WorkflowRerankScore(query string, hits []models.SearchResult) []models.Sear
 	out := make([]models.SearchResult, len(hits))
 	for i, s := range scores {
 		out[i] = s.base
+		// Keep Score ABSOLUTE (1 - chroma distance, set pre-rerank): the
+		// rerank composite is normalized within the hit set, so a junk-only
+		// set would inflate to ~0.6 and defeat downstream relevance floors
+		// (Ask abstain, chat auto-store gate). Rerank decides ORDER only;
+		// Source marks that order as reranked.
+		out[i].Score = math.Max(0, 1-float64(out[i].Distance))
+		out[i].Source = "reranked"
 	}
 	return out
 }

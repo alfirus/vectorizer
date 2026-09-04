@@ -223,7 +223,13 @@ func main() {
 api.Get("/metrics", func(c *fiber.Ctx) error {
 		metrics := store.GlobalMetrics
 		c.Set("Content-Type", "text/plain")
-		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total Total messages added\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total %d\n# HELP vectorizer_searches_total Total searches\n# TYPE vectorizer_searches_total counter\nvectorizer_searches_total %d\n", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load()))
+		var deriverDrops uint64
+		var deriverDepth int
+		if drv != nil {
+			deriverDrops = drv.Drops()
+			deriverDepth = drv.QueueDepth()
+		}
+		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total Total messages added\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total %d\n# HELP vectorizer_searches_total Total searches\n# TYPE vectorizer_searches_total counter\nvectorizer_searches_total %d\n# HELP vectorizer_deriver_drops_total Facts discarded on full deriver queue\n# TYPE vectorizer_deriver_drops_total counter\nvectorizer_deriver_drops_total %d\n# HELP vectorizer_deriver_queue_depth Pending deriver backlog\n# TYPE vectorizer_deriver_queue_depth gauge\nvectorizer_deriver_queue_depth %d\n", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load(), deriverDrops, deriverDepth))
 	})
 
 	// Workspaces ()
@@ -336,10 +342,11 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Post("/keys", keysH.Create)
 	api.Get("/keys", keysH.List)
 
-	// Messages missing CRUD ()
-	api.Put("/messages/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "update not implemented — delete + re-add instead"}) })
-	api.Delete("/messages/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "delete not implemented — use TTL or recreate workspace"}) })
-	api.Get("/messages/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "get by id not implemented — use GET /messages?workspace_id=..."}) })
+	// Messages CRUD — forget/correct wrong memories (delete removes all chunks
+	// for a message ID; update is delete + re-add under the same ID).
+	api.Put("/messages/:id", messagesHandler.UpdateMessageContent)
+	api.Delete("/messages/:id", messagesHandler.DeleteMessage)
+	api.Get("/messages/:id", messagesHandler.GetMessageByID)
 
 	// Session context with rolling-window tokens budgeting
 	api.Get("/workspaces/:workspace_id/sessions/:session_id/context", func(c *fiber.Ctx) error {

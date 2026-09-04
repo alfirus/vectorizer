@@ -1,19 +1,24 @@
 package deriver
-
 import (
 	"strings"
+	"sync/atomic"
 	"time"
+
 
 	"github.com/alfirus/vectorizer/internal/llmbrain"
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
-// Deriver extracts conclusions asynchronously 
+// Deriver extracts conclusions asynchronously
 type Deriver struct {
 	store *store.Store
 	brain *llmbrain.Service
 	queue chan queued
 	stop  chan struct{}
+	// drops counts facts silently discarded because the queue was full.
+	// A monotonic counter (no silent loss): surfaced via Drops() and the
+	// /metrics endpoint so a saturated queue pages instead of vanishing.
+	drops atomic.Uint64
 }
 
 type queued struct { ws, sessionID, peerID, content, msgID string }
@@ -23,8 +28,19 @@ func New(s *store.Store, b *llmbrain.Service) *Deriver {
 }
 
 func (d *Deriver) Enqueue(ws, sessionID, peerID, msgID, content string) {
-	select { case d.queue <- queued{ws, sessionID, peerID, content, msgID}: default: }
+	select {
+	case d.queue <- queued{ws, sessionID, peerID, content, msgID}:
+	default:
+		// Queue full — count it LOUDLY instead of vanishing the fact.
+		d.drops.Add(1)
+	}
 }
+
+// Drops returns the lifetime count of facts discarded on a full queue.
+func (d *Deriver) Drops() uint64 { return d.drops.Load() }
+
+// QueueDepth returns the current pending backlog (for /metrics alerting).
+func (d *Deriver) QueueDepth() int { return len(d.queue) }
 
 func (d *Deriver) Start() {
 	if d.brain==nil { return }
