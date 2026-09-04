@@ -284,6 +284,12 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Post("/messages/upload", ingestH.Upload)
 	api.Get("/messages/grep", ingestH.Grep)
 	api.Get("/messages/temporal", ingestH.Temporal)
+	// Codebase indexing mode (phase 2): server-local repo walk → symbol
+	// chunks + DEFINES/CALLS/IMPORTS reasoning edges.
+	codeH := handlers.NewCodeHandler(vecStore)
+	api.Post("/code/index", codeH.Index)
+	api.Get("/code/symbols", codeH.Symbols)
+	api.Get("/code/callers", codeH.Callers)
 	api.Delete("/workspaces/:id/ttl", func(c *fiber.Ctx) error {
 		if cfg.TTLHours==0 && c.Query("before")=="" { return c.Status(400).JSON(fiber.Map{"error":"TTL disabled or before required"})}
 		before:=c.Query("before")

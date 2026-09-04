@@ -92,6 +92,20 @@ func (s *Store) GetMessageChunks(workspaceID, messageID string) ([]map[string]in
 	return s.chroma.GetDocuments(coll.ID, map[string]interface{}{"message_id": messageID}, 0, 0)
 }
 
+// QueryByMetadata fetches raw docs from a workspace collection by metadata
+// filter (code/symbol lookups, hash-skip probes). Thin wrapper over
+// Chroma GetDocuments — no embedding spend.
+func (s *Store) QueryByMetadata(workspaceID string, where map[string]interface{}, limit int) ([]map[string]interface{}, error) {
+	coll, err := s.chroma.GetCollection(s.GetCollectionName(workspaceID))
+	if err != nil {
+		return nil, fmt.Errorf("get collection: %w", err)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	return s.chroma.GetDocuments(coll.ID, where, limit, 0)
+}
+
 // CountMessageChunks counts stored chunks for one message ID (cheap
 // existence probe used by workspace resolution).
 func (s *Store) CountMessageChunks(workspaceID, messageID string) (int, error) {

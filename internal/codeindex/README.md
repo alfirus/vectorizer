@@ -48,10 +48,15 @@ symbols + BFS Expand is enough until slowness is proven.
   (same-repo, excludes self, stdlib-blind — precision over recall).
 - Covered by unit test (`extractor_test.go`).
 
-## Phase 2 (not started)
-1. `POST /code/index {path, workspace_id?}` handler: walk repo (respect
-   `.gitignore` + `vecignore`), hash-skip unchanged, AddMessage per chunk,
-   graph.AddEdge DEFINES/CALLS/IMPORTS.
-2. MCP: index_repo / symbols / callers tools.
-3. Validate on vectorizer repo itself: index `internal/store`, ask
-   "what calls UpdateMessage" via trace/Expand, compare vs grep.
+## Phase 2 (DONE 2026-09-04)
+- `POST /code/index {path, workspace_id?, session_id?}` (`internal/handlers/code.go`):
+  walk with codeSkipDirs + `.gitignore` basenames, 500KB cap, per-file
+  hash-skip via `QueryByMetadata(source_path)` → `file_hash` compare, one
+  message per file (stable `codefile_<sha>` ID, `source_type=file`,
+  `importance=3`), CALLS/IMPORTS as reasoning edges (`calls:X`,
+  `file:<path>` conclusion IDs — trace-readable).
+- MCP 22→25: `vectorizer_index_repo`, `vectorizer_symbols`, `vectorizer_callers`.
+- Validated: walk+parse+CALLS edge on scratch repo (`edges:1` main→Greet);
+  full write path needs ns539881 (laptop can't reach server Chroma).
+- Remaining: index the real repo on-server, ask "what calls UpdateMessage",
+  compare vs grep.
