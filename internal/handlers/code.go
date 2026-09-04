@@ -232,15 +232,21 @@ func (h *CodeHandler) Callers(c *fiber.Ctx) error {
 	}
 	var callers []string
 	for _, e := range chain {
-		if prem, ok := e["premise_ids"].(string); ok {
+		m, _ := e["metadata"].(map[string]interface{})
+		if m == nil {
+			continue
+		}
+		if prem, ok := m["premise_ids"].(string); ok {
 			for _, p := range strings.Split(prem, ",") {
 				if strings.HasPrefix(p, "defines:") {
 					callers = append(callers, strings.TrimPrefix(p, "defines:"))
 				}
 			}
 		}
-		if msg, ok := e["supporting_message_ids"].(string); ok && len(callers) == 0 {
-			callers = append(callers, msg)
+		if len(callers) == 0 {
+			if msg, ok := m["supporting_message_ids"].(string); ok && msg != "" {
+				callers = append(callers, msg)
+			}
 		}
 	}
 	return c.JSON(fiber.Map{"workspace_id": ws, "symbol": symbol, "callers": callers, "count": len(callers)})
