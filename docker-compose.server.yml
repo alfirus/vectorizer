@@ -37,10 +37,12 @@ services:
     ports:
       - "127.0.0.1:8102:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      # Chroma 1.0.0 persists to /data per baked-in /config.yaml (persist_path)
+      # — PERSIST_DIRECTORY env is ignored. Mount here or vectors live in the
+      # container layer and a recreate wipes everything.
+      - chroma_data:/data
     environment:
       IS_PERSISTENT: "TRUE"
-      PERSIST_DIRECTORY: /chroma/chroma
       CHROMA_SERVER_HOST: 0.0.0.0
       CHROMA_SERVER_HTTP_PORT: 8000
     restart: unless-stopped
