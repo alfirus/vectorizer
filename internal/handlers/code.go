@@ -186,7 +186,7 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 		parsed = append(parsed, j.fs)
 	}
 	for _, e := range codeindex.CallEdges(parsed) {
-		if err := h.store.AddReasoningEdge(ws, "codeindex", "calls:"+e.Caller,
+		if err := h.store.AddCodeEdge(ws, "calls:"+e.Caller,
 			[]string{"defines:" + e.Callee}, []string{"file:" + e.File}); err != nil {
 			res.Errors = append(res.Errors, "edge "+e.Caller+"->"+e.Callee+": "+err.Error())
 			continue
@@ -195,7 +195,7 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 	}
 	for _, j := range todo {
 		for _, imp := range j.fs.Imports {
-			if err := h.store.AddReasoningEdge(ws, "codeindex", "file:"+j.rel,
+			if err := h.store.AddCodeEdge(ws, "file:"+j.rel,
 				[]string{"imports:" + imp}, []string{"file:" + j.rel}); err != nil {
 				res.Errors = append(res.Errors, "edge imports "+j.rel+": "+err.Error())
 				continue
@@ -248,28 +248,12 @@ func (h *CodeHandler) Callers(c *fiber.Ctx) error {
 	if ws == "" || symbol == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id and symbol are required"})
 	}
-	chain, err := h.store.GetReasoningChain(ws, "calls:"+symbol)
+	callers, err := h.store.CodeCallers(ws, symbol)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "query failed"})
 	}
-	var callers []string
-	for _, e := range chain {
-		m, _ := e["metadata"].(map[string]interface{})
-		if m == nil {
-			continue
-		}
-		if prem, ok := m["premise_ids"].(string); ok {
-			for _, p := range strings.Split(prem, ",") {
-				if strings.HasPrefix(p, "defines:") {
-					callers = append(callers, strings.TrimPrefix(p, "defines:"))
-				}
-			}
-		}
-		if len(callers) == 0 {
-			if msg, ok := m["supporting_message_ids"].(string); ok && msg != "" {
-				callers = append(callers, msg)
-			}
-		}
+	if callers == nil {
+		callers = []string{}
 	}
 	return c.JSON(fiber.Map{"workspace_id": ws, "symbol": symbol, "callers": callers, "count": len(callers)})
 }
