@@ -13,7 +13,7 @@ func fnvHash(s string) uint64 {
 	return h.Sum64()
 }
 
-func reasoningCollection(ws string) string { return fmt.Sprintf("ws_%s_reasoning", ws) }
+func reasoningCollection(ws string) string { return fmt.Sprintf("ws_%s_reasoning", ResolveWorkspaceID(ws)) }
 
 // Premise edge: conclusion depends on message_ids / other conclusion_ids
 type ReasoningEdge struct {
@@ -74,7 +74,7 @@ func (s *Store) GetReasoningChain(ws, conclusionID string) ([]map[string]interfa
 // Doc shape mirrors ReasoningEdge so GetReasoningChain-style readers work;
 // IDs are deterministic (no dup pile-up on re-index).
 func (s *Store) AddCodeEdge(ws, conclusionID string, premiseIDs, msgIDs []string) error {
-	coll, err := s.chroma.EnsureCollection("ws_"+ws, map[string]interface{}{"workspace_id": ws})
+	coll, err := s.chroma.EnsureCollection(s.GetCollectionName(ws), map[string]interface{}{"workspace_id": ResolveWorkspaceID(ws)})
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (s *Store) AddCodeEdge(ws, conclusionID string, premiseIDs, msgIDs []string
 // CodeCallers reads CALLS edges for symbol from the MAIN collection
 // (no sidecar). Returns defining symbols (defines:X) or file refs.
 func (s *Store) CodeCallers(ws, symbol string) ([]string, error) {
-	coll, err := s.chroma.GetCollection("ws_" + ws)
+	coll, err := s.chroma.GetCollection(s.GetCollectionName(ws))
 	if err != nil {
 		return nil, nil
 	}

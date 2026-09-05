@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-func peerCollection(ws string) string { return fmt.Sprintf("ws_%s_peers", ws) }
-func peerCardCollection(ws string) string { return fmt.Sprintf("ws_%s_peer_cards", ws) }
+func peerCollection(ws string) string { return fmt.Sprintf("ws_%s_peers", ResolveWorkspaceID(ws)) }
+func peerCardCollection(ws string) string { return fmt.Sprintf("ws_%s_peer_cards", ResolveWorkspaceID(ws)) }
 
 func (s *Store) CreatePeer(workspaceID, peerName string, metadata map[string]interface{}) (string, error) {
 	if !strings.HasPrefix(peerCollection(workspaceID), "ws_") { return "", fmt.Errorf("invalid workspace") }

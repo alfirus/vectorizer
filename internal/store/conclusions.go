@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func conclusionsCollection(workspaceID string) string { return fmt.Sprintf("ws_%s_conclusions", workspaceID) }
+func conclusionsCollection(workspaceID string) string { return fmt.Sprintf("ws_%s_conclusions", ResolveWorkspaceID(workspaceID)) }
 
 func (s *Store) CreateConclusion(workspaceID, peerID, content string, metadata map[string]interface{}) (string, error) {
 	collName := conclusionsCollection(workspaceID)

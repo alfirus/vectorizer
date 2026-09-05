@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 
 	"github.com/alfirus/vectorizer/internal/models"
 	"github.com/alfirus/vectorizer/internal/store"
@@ -25,6 +24,9 @@ func (h *WorkspacesHandler) CreateWorkspace(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid name format (a-zA-Z0-9_-, 1-512 chars)"})
 	}
 	ws := models.NewWorkspace(req.Name)
+	// NewWorkspace canonicalizes name→ID, so the returned ws.ID is the
+	// single collection suffix every other path (messages, code, search)
+	// already uses. POSTing "PilotV4" twice = same workspace, no dupes.
 	if err := h.store.EnsureWorkspace(ws.ID); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to create workspace"})
 	}
@@ -44,10 +46,7 @@ func (h *WorkspacesHandler) ListWorkspaces(c *fiber.Ctx) error {
 }
 
 func (h *WorkspacesHandler) GetWorkspace(c *fiber.Ctx) error {
-	id := c.Params("id")
-	if _, err := uuid.Parse(id); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid workspace ID"})
-	}
+	id := models.CanonicalWorkspaceID(c.Params("id"))
 	stats, err := h.store.GetWorkspaceStats(id)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to get workspace"})

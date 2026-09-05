@@ -288,8 +288,28 @@ func (s *Store) dummyVector() []float32 {
 	return make([]float32, dim)
 }
 
+// ResolveWorkspaceID is the single choke point for workspace identity.
+// Every public Store method that takes a workspaceID must pass it through
+// here first, so "PilotV4", "pilotv4", and "pilot-v4" all resolve to the
+// same ws_pilotv4 collection. UUID-style IDs (legacy POST /workspaces
+// output, e.g. fce1f490-...) pass through UNCHANGED — they name real
+// collections that a rename migration must handle explicitly, never
+// silently remap.
+func ResolveWorkspaceID(id string) string {
+	s := strings.TrimSpace(id)
+	if s == "" {
+		return "default"
+	}
+	// Legacy UUID form: leave untouched so old collections stay addressable.
+	if len(s) == 36 && strings.Count(s, "-") == 4 {
+		return s
+	}
+	return models.CanonicalWorkspaceID(s)
+}
+
 // EnsureWorkspace creates a ChromaDB collection for the workspace if it doesn't exist.
 func (s *Store) EnsureWorkspace(workspaceID string) error {
+	workspaceID = ResolveWorkspaceID(workspaceID)
 	collName := fmt.Sprintf("ws_%s", workspaceID)
 	_, err := s.chroma.EnsureCollection(collName, map[string]interface{}{
 		"workspace_id": workspaceID,
@@ -299,7 +319,7 @@ func (s *Store) EnsureWorkspace(workspaceID string) error {
 
 // GetCollectionName returns the ChromaDB collection name for a workspace.
 func (s *Store) GetCollectionName(workspaceID string) string {
-	return fmt.Sprintf("ws_%s", workspaceID)
+	return fmt.Sprintf("ws_%s", ResolveWorkspaceID(workspaceID))
 }
 
 // AddMessage stores a message in ChromaDB with embedding.

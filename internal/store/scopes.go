@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func scopeCollection(ws string) string { return fmt.Sprintf("ws_%s_scopes", ws) }
+func scopeCollection(ws string) string { return fmt.Sprintf("ws_%s_scopes", ResolveWorkspaceID(ws)) }
 
 func (s *Store) CreateScope(workspaceID, scopeName string, sessionIDs []string) error {
 	coll, err := s.chroma.EnsureCollection(scopeCollection(workspaceID), map[string]interface{}{"workspace_id": workspaceID})

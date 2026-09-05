@@ -27,16 +27,43 @@ type validationError struct{ msg string }
 func (e *validationError) Error() string { return e.msg }
 
 // Workspace represents a top-level namespace for agent memory isolation.
+//
+// Identity rule (2026-09-05): the human-readable name IS the ID.
+// POST /workspaces used to mint a UUID while every other path (messages,
+// code index, search) used the name — creating two parallel universes
+// (ws_<name> + ws_<uuid>) for one logical workspace. NewWorkspace now
+// canonicalizes: lowercase, spaces/dashes → underscores, strip anything
+// outside [a-z0-9_]. "PilotV4" and "pilotv4" resolve to the same workspace.
 type Workspace struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// CanonicalWorkspaceID normalizes a human name into the single canonical
+// workspace ID. It is idempotent: CanonicalWorkspaceID(CanonicalWorkspaceID(x)) == CanonicalWorkspaceID(x).
+func CanonicalWorkspaceID(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = strings.ReplaceAll(s, "-", "_")
+	s = strings.ReplaceAll(s, " ", "_")
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		out = "default"
+	}
+	return out
+}
+
 func NewWorkspace(name string) *Workspace {
+	id := CanonicalWorkspaceID(name)
 	return &Workspace{
-		ID:        uuid.New().String(),
-		Name:      name,
+		ID:        id,
+		Name:      id,
 		CreatedAt: time.Now().UTC(),
 	}
 }
