@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/alfirus/vectorizer/internal/models"
@@ -53,6 +54,11 @@ func (s *Store) DeleteWorkspace(workspaceID string) error {
 	for _, c := range colls {
 		if len(c.Name) >= len("ws_"+workspaceID) && c.Name[:len("ws_"+workspaceID)] == "ws_"+workspaceID {
 			if err := s.chroma.DeleteCollection(c.ID); err != nil {
+				// Chroma may list ghost IDs (tenant-scoped listing vs actual):
+				// 404 = already gone, keep wiping the rest.
+				if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "NotFound") {
+					continue
+				}
 				return fmt.Errorf("delete workspace %s: delete collection %s: %w", workspaceID, c.Name, err)
 			}
 		}
