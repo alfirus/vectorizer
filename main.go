@@ -249,7 +249,9 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"updated": true})
 	})
 	api.Delete("/workspaces/:id", func(c *fiber.Ctx) error {
-		_ = vecStore.DeleteWorkspace(c.Params("id"))
+		if err := vecStore.DeleteWorkspace(c.Params("id")); err != nil {
+			return c.Status(500).JSON(fiber.Map{"deleted": false, "error": err.Error()})
+		}
 		return c.Status(202).JSON(fiber.Map{"deleted": true})
 	})
 	api.Post("/workspaces/:id/search", func(c *fiber.Ctx) error {

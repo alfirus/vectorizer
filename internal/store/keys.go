@@ -3,6 +3,7 @@ package store
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -45,10 +46,15 @@ func ListKeys(workspaceID string) []*APIKey {
 
 func (s *Store) DeleteWorkspace(workspaceID string) error {
 	// Delete all collections with prefix ws_<id>*
-	colls, _ := s.chroma.ListCollections()
+	colls, err := s.chroma.ListCollections()
+	if err != nil {
+		return fmt.Errorf("delete workspace %s: list collections: %w", workspaceID, err)
+	}
 	for _, c := range colls {
 		if len(c.Name) >= len("ws_"+workspaceID) && c.Name[:len("ws_"+workspaceID)] == "ws_"+workspaceID {
-			_ = s.chroma.DeleteCollection(c.ID)
+			if err := s.chroma.DeleteCollection(c.ID); err != nil {
+				return fmt.Errorf("delete workspace %s: delete collection %s: %w", workspaceID, c.Name, err)
+			}
 		}
 	}
 	return nil
