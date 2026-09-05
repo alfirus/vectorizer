@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// stdio entry — local use (Hermes spawns this directly).
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServer } from "./server.js";
 
