@@ -66,8 +66,17 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "path is required (server-local repo path)"})
 	}
 	info, err := os.Stat(req.Path)
-	if err != nil || !info.IsDir() {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "path is not a readable directory on the server"})
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "path is not readable on the server"})
+	}
+	// Single-file mode: index just this file (root files like main.go).
+	// Walk root becomes its dir; rel paths stay repo-relative.
+	walkRoot := req.Path
+	if !info.IsDir() {
+		if codeindex.LanguageFor(req.Path) == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "file type not indexable"})
+		}
+		walkRoot = filepath.Dir(req.Path)
 	}
 	ws := req.WorkspaceID
 	if ws == "" {
@@ -78,7 +87,7 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 		sess = fmt.Sprintf("index-%s", time.Now().UTC().Format("20060102-150405"))
 	}
 
-	gitignore := loadGitignore(req.Path)
+	gitignore := loadGitignore(walkRoot)
 	res := &IndexResult{WorkspaceID: ws}
 
 	// Phase A: walk + parse.
@@ -89,11 +98,21 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 		fs   codeindex.FileSymbols
 	}
 	var jobs []fileJob
-	_ = filepath.WalkDir(req.Path, func(p string, d os.DirEntry, err error) error {
+	singleFile := !info.IsDir()
+	_ = filepath.WalkDir(walkRoot, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
+		if singleFile && p != req.Path {
+			if d.IsDir() && p != walkRoot {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		rel, _ := filepath.Rel(req.Path, p)
+		if singleFile {
+			rel = filepath.Base(p)
+		}
 		if d.IsDir() {
 			base := filepath.Base(p)
 			if rel != "." && (codeSkipDirs[base] || gitignore[base]) {
