@@ -24,12 +24,13 @@ Teach agents to use Vectorizer (self-hosted, 768d `nomic-embed-text-v2` via LM S
 
 ## "index this project" (2026-09: magic phrase → code index)
 User saying "index this project" means: stage the project onto the server, index it, confirm searchable. Steps:
-1. Workspace name = `code_<folder>` (lowercase, dashes→underscores).
+1. Workspace name = `code_<folder>` (lowercase, dashes→underscores) — ONE canonical workspace per project. NEVER invent variants (`2`, `_full`, `_v2`): re-index into the SAME workspace (unchanged files skip by hash). If a workspace looks stale, DELETE it first, then re-index fresh.
 2. Copy code to server: `tar` the project (exclude `node_modules .next .git dist build`) → `/opt/code-stage/<name>/` via SSH (`ubuntu@100.90.123.105`, key `~/.ssh/personal`). Server path = `/data/code-stage/<name>`.
 3. `vectorizer_index_repo {path: "/data/code-stage/<name>", workspace_id: "code_<name>"}` — budget ~15s/file embed time (LM Studio); if client times out, the server keeps working — poll with `vectorizer_symbols`.
 4. Verify: `vectorizer_symbols {workspace_id}` junk-check (no `vault-data/`/`exports/` dumps), then `vectorizer_callers` on a known symbol. Report files/symbols/edges.
 5. Re-index later = just repeat 2–4 (unchanged files skip by hash, only new/changed embed — fast).
-- Pitfall: the server ONLY sees container mounts (`/data/repo`, `/data/code-stage`) — laptop paths never work directly. Always stage first.
+- Server ONLY sees container mounts (`/data/repo`, `/data/code-stage`) — laptop paths never work directly. Always stage first.
+- One project = ONE `ws_code_<name>` collection (edges live in-main since `a728320`, no `_reasoning` sidecar). If you see `code_X_reasoning` or duplicate `code_X2` collections, they're stale — DELETE them.
 
 ## "scan this project" (2026-09: briefing + issue hunt)
 After indexing (or on an already-indexed `code_<name>` workspace):
