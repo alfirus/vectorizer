@@ -22,6 +22,21 @@ Teach agents to use Vectorizer (self-hosted, 768d `nomic-embed-text-v2` via LM S
 - `vectorizer_callers {workspace_id, symbol}` — "what calls X?" from CALLS edges. Use before refactoring.
 - Pitfall: reasoning-chain responses nest fields under `metadata` (`e["metadata"]["premise_ids"]`, NOT `e["premise_ids"]`).
 
+## "index this project" (2026-09: magic phrase → code index)
+User saying "index this project" means: stage the project onto the server, index it, confirm searchable. Steps:
+1. Workspace name = `code_<folder>` (lowercase, dashes→underscores).
+2. Copy code to server: `tar` the project (exclude `node_modules .next .git dist build`) → `/opt/code-stage/<name>/` via SSH (`ubuntu@100.90.123.105`, key `~/.ssh/personal`). Server path = `/data/code-stage/<name>`.
+3. `vectorizer_index_repo {path: "/data/code-stage/<name>", workspace_id: "code_<name>"}` — budget ~15s/file embed time (LM Studio); if client times out, the server keeps working — poll with `vectorizer_symbols`.
+4. Verify: `vectorizer_symbols {workspace_id}` junk-check (no `vault-data/`/`exports/` dumps), then `vectorizer_callers` on a known symbol. Report files/symbols/edges.
+5. Re-index later = just repeat 2–4 (unchanged files skip by hash, only new/changed embed — fast).
+- Pitfall: the server ONLY sees container mounts (`/data/repo`, `/data/code-stage`) — laptop paths never work directly. Always stage first.
+
+## "scan this project" (2026-09: briefing + issue hunt)
+After indexing (or on an already-indexed `code_<name>` workspace):
+1. Briefing from the index — structure + entry points + key modules via `vectorizer_symbols`, imports via CALLS/IMPORTS edges (`vectorizer_callers` on entry symbols), README/docs via `vectorizer_search {workspace_id: "code_<name>"}`.
+2. Issue hunt — TODO/FIXME/XXX + secrets (`sk-`, `AKIA`, `BEGIN PRIVATE KEY`) via `vectorizer_search` on the code workspace; dead code via `vectorizer_callers` = empty on exported symbols; risks = error-swallows (`_ =`) + missing-timeout HTTP clients + unguarded deletes.
+3. Deliver: briefing first, then findings ranked by risk. Offer to file fixes, don't just list.
+
 ## Provenance + hygiene (new 2026-09)
 - `vectorizer_trace {workspace_id, id, direction: forward|reverse, depth?}` — forward = "why do I believe X?" (conclusion → premises → messages); reverse = "what breaks if I forget X?" (blast radius). Check reverse BEFORE deleting anything.
 - `vectorizer_stale {workspace_id, max_age_days?, limit?}` — dead-knowledge proposals (old, never-reinforced, non-timeless). Review, then confirm via delete/TTL. Nothing auto-deletes.
