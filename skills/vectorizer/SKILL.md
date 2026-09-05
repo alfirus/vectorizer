@@ -42,3 +42,6 @@ Teach agents to use Vectorizer (self-hosted, 768d `nomic-embed-text-v2` via LM S
 
 ## Setup
 Requires `mcp.vectorizer` configured (`VECTORIZER_URL=http://100.90.123.105:8091` live, `http://localhost:8091` local dev). If missing, use REST directly.
+
+## Slow-model backpressure (2026-09)
+Embed + brain hit LM Studio over LAN — a slow model queues requests server-side. The server now defends itself: per-attempt timeouts (`EMBED_TIMEOUT_SECS` 300 / `LLM_TIMEOUT_SECS` 600), 429/5xx retry with backoff + `Retry-After`, singleflight dedup of identical embeds, concurrency caps (`EMBED_MAX_INFLIGHT` 4 / `LLM_MAX_INFLIGHT` 2). If ingests feel slow, raise the timeouts — don't hammer retries; bursts queue in-process, not in LM Studio.
