@@ -9,7 +9,6 @@
 //   MCP_BEARER_TOKEN (required — refuse to start without it)
 //   VECTORIZER_URL / VECTORIZER_API_KEY (same as stdio)
 import express from "express";
-import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "./server.js";
 
@@ -39,10 +38,12 @@ app.use("/mcp", (req, res, next) => {
 });
 
 app.post("/mcp", async (req, res) => {
+  // Stateless: fresh server+transport per request, no session tracking.
+  // Correct for a single trusted client; avoids cross-request session store.
   const server = createServer();
   try {
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      sessionIdGenerator: undefined,
     });
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
