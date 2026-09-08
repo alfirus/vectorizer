@@ -12,7 +12,7 @@ export function parseConfig(): VectorizerConfig {
 }
 
 export function createClient(cfg: VectorizerConfig) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = { "Content-Type": "application/json", "X-Source": "mcp" };
   if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
   async function req(path: string, init?: RequestInit) {
     const res = await fetch(`${cfg.baseUrl}${path}`, {
