@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -206,6 +207,24 @@ func main() {
 		return c.Next()
 	})
 
+	// Usage logger — answers "is any AI agent really using Vectorizer?".
+	// Runs right after the rate limiter so every allowed call is classified.
+	// Telemetry paths (health/metrics/usage/analytics) are never logged,
+	// so dashboard polling can't drown out real agent signal.
+	app.Use(func(c *fiber.Ctx) error {
+		if action, ok := store.ClassifyUsage(c.Method(), c.Path()); ok {
+			source := c.Get("X-Source")
+			switch source {
+			case store.SourceMCP, store.SourceDashboard:
+			default:
+				source = store.SourceAPI
+			}
+			ws := c.Query("workspace_id", c.Params("workspace_id", c.Params("id")))
+			store.GlobalUsage.Record(action, source, ws)
+		}
+		return c.Next()
+	})
+
 	// Routes
 	api := app.Group("/api/v1")
 
@@ -282,6 +301,13 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Get("/messages/search", messagesHandler.SearchMessagesSimple)
 	api.Post("/messages/search/all", messagesHandler.SearchAllWorkspaces)
 	api.Get("/messages/analytics", messagesHandler.SearchAnalytics)
+	api.Get("/usage/daily", func(c *fiber.Ctx) error {
+		days, _ := strconv.Atoi(c.Query("days", "30"))
+		if days <= 0 || days > 90 {
+			days = 30
+		}
+		return c.JSON(fiber.Map{"days": store.GlobalUsage.Last(days)})
+	})
 	api.Get("/workspaces/:id/stats", messagesHandler.GetWorkspaceStats)
 
 	// Messages retrieval + ingestion + temporal
