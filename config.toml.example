@@ -26,3 +26,7 @@ model = "qwen3:8b"
 
 [grpc]
 port = 50051
+
+# Vault writeback (env-only, no TOML section — must be a conscious choice):
+# VAULT_WRITEBACK=true               # default false; mirror turns to 10-memory/sessions/
+# VAULT_WRITEBACK_WORKSPACES=""      # CSV allowlist, empty = all

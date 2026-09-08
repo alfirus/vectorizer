@@ -19,13 +19,14 @@ import (
 	"github.com/alfirus/vectorizer/internal/deriver"
 	"github.com/alfirus/vectorizer/internal/dreamer"
 	"github.com/alfirus/vectorizer/internal/embedding"
+	grpcsrv "github.com/alfirus/vectorizer/internal/grpc"
 	"github.com/alfirus/vectorizer/internal/handlers"
 	"github.com/alfirus/vectorizer/internal/llmbrain"
 	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/store"
-	grpcsrv "github.com/alfirus/vectorizer/internal/grpc"
-	pb "github.com/alfirus/vectorizer/vectorizerpb"
 	"github.com/alfirus/vectorizer/internal/webhooks"
+	"github.com/alfirus/vectorizer/internal/writeback"
+	pb "github.com/alfirus/vectorizer/vectorizerpb"
 )
 
 func main() {
@@ -102,14 +103,39 @@ func main() {
 		drv.Start()
 		defer drv.Stop()
 	}
-
 	// Webhooks (created early so messages can fire)
 	whMgr := webhooks.New()
+
+	// Vault writeback: mirror stored turns to per-session staging markdown.
+	// Gate: VAULT_WRITEBACK=true (default false). Async, never blocks writes.
+	var wb *writeback.Writer
+	if cfg.VaultWriteback {
+		vaultRoot := os.Getenv("VAULT_ROOT")
+		if vaultRoot == "" {
+			fmt.Println("  Vault writeback: ON but VAULT_ROOT unset — disabled")
+		} else {
+			wb = writeback.New(vaultRoot, cfg.VaultWritebackWorkspaces)
+			wb.Start()
+			defer wb.Stop()
+			fmt.Printf("  Vault writeback: ON (root=%s", vaultRoot)
+			if cfg.VaultWritebackWorkspaces != "" {
+				fmt.Printf(", workspaces=%s", cfg.VaultWritebackWorkspaces)
+			}
+			fmt.Println(")")
+		}
+	} else {
+		fmt.Println("  Vault writeback: OFF (set VAULT_WRITEBACK=true to enable)")
+	}
 
 	// Initialize handlers
 	workspacesHandler := handlers.NewWorkspacesHandler(vecStore)
 	messagesHandler := handlers.NewMessagesHandler(vecStore)
-	if drv != nil { messagesHandler.SetDeriver(drv) }
+	if drv != nil {
+		messagesHandler.SetDeriver(drv)
+	}
+	if wb != nil {
+		messagesHandler.SetWriteback(wb)
+	}
 	messagesHandler.SetWebhooks(whMgr)
 	var brainHandler *handlers.BrainHandler
 	if brain != nil {
@@ -224,7 +250,7 @@ func main() {
 			"llm_enabled": cfg.LLMEnabled, "chromadb": chromaStatus, "embedding_model": cfg.EmbedModel,
 		})
 	})
-api.Get("/metrics", func(c *fiber.Ctx) error {
+	api.Get("/metrics", func(c *fiber.Ctx) error {
 		metrics := store.GlobalMetrics
 		c.Set("Content-Type", "text/plain")
 		var deriverDrops uint64
@@ -233,7 +259,15 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 			deriverDrops = drv.Drops()
 			deriverDepth = drv.QueueDepth()
 		}
-		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total Total messages added\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total %d\n# HELP vectorizer_searches_total Total searches\n# TYPE vectorizer_searches_total counter\nvectorizer_searches_total %d\n# HELP vectorizer_deriver_drops_total Facts discarded on full deriver queue\n# TYPE vectorizer_deriver_drops_total counter\nvectorizer_deriver_drops_total %d\n# HELP vectorizer_deriver_queue_depth Pending deriver backlog\n# TYPE vectorizer_deriver_queue_depth gauge\nvectorizer_deriver_queue_depth %d\n", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load(), deriverDrops, deriverDepth))
+		var wbWrites, wbDrops, wbSkippedRO uint64
+		var wbDepth int
+		if wb != nil {
+			wbWrites = wb.Writes()
+			wbDrops = wb.Drops()
+			wbSkippedRO = wb.SkippedRO()
+			wbDepth = wb.QueueDepth()
+		}
+		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total Total messages added\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total %d\n# HELP vectorizer_searches_total Total searches\n# TYPE vectorizer_searches_total counter\nvectorizer_searches_total %d\n# HELP vectorizer_deriver_drops_total Facts discarded on full deriver queue\n# TYPE vectorizer_deriver_drops_total counter\nvectorizer_deriver_drops_total %d\n# HELP vectorizer_deriver_queue_depth Pending deriver backlog\n# TYPE vectorizer_deriver_queue_depth gauge\nvectorizer_deriver_queue_depth %d\n# HELP vectorizer_writeback_writes_total Staging markdown appends\n# TYPE vectorizer_writeback_writes_total counter\nvectorizer_writeback_writes_total %d\n# HELP vectorizer_writeback_drops_total Turns lost on full writeback queue\n# TYPE vectorizer_writeback_drops_total counter\nvectorizer_writeback_drops_total %d\n# HELP vectorizer_writeback_skipped_ro_total Turns skipped (vault read-only)\n# TYPE vectorizer_writeback_skipped_ro_total counter\nvectorizer_writeback_skipped_ro_total %d\n# HELP vectorizer_writeback_queue_depth Pending writeback backlog\n# TYPE vectorizer_writeback_queue_depth gauge\nvectorizer_writeback_queue_depth %d\n", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load(), deriverDrops, deriverDepth, wbWrites, wbDrops, wbSkippedRO, wbDepth))
 	})
 
 	// Workspaces ()
@@ -243,7 +277,9 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Get("/workspaces/:id/health", workspacesHandler.GetWorkspaceHealth)
 	api.Get("/workspaces/:id", workspacesHandler.GetWorkspace)
 	api.Put("/workspaces/:id", func(c *fiber.Ctx) error {
-		var req struct{ Metadata map[string]interface{} `json:"metadata"`}
+		var req struct {
+			Metadata map[string]interface{} `json:"metadata"`
+		}
 		_ = c.BodyParser(&req)
 		_ = vecStore.UpdateWorkspace(c.Params("id"), req.Metadata)
 		return c.JSON(fiber.Map{"updated": true})
@@ -255,17 +291,25 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 		return c.Status(202).JSON(fiber.Map{"deleted": true})
 	})
 	api.Post("/workspaces/:id/search", func(c *fiber.Ctx) error {
-		var req struct{ Query string `json:"query"`; N int `json:"n_results"`}
-		_ = c.BodyParser(&req); if req.N==0 { req.N=5 }
-		results,_:=vecStore.Search(req.Query, c.Params("id"), "", "", req.N)
+		var req struct {
+			Query string `json:"query"`
+			N     int    `json:"n_results"`
+		}
+		_ = c.BodyParser(&req)
+		if req.N == 0 {
+			req.N = 5
+		}
+		results, _ := vecStore.Search(req.Query, c.Params("id"), "", "", req.N)
 		return c.JSON(fiber.Map{"results": results})
 	})
 	api.Get("/workspaces/:id/queue", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "idle", "pending": 0})
 	})
 	api.Post("/workspaces/:id/dream", func(c *fiber.Ctx) error {
-		if brain==nil { return c.Status(503).JSON(fiber.Map{"error":"brain disabled"})}
-		d:=dreamer.New(vecStore, brain, 0)
+		if brain == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "brain disabled"})
+		}
+		d := dreamer.New(vecStore, brain, 0)
 		go d.RunOnce()
 		return c.JSON(fiber.Map{"scheduled": true})
 	})
@@ -297,11 +341,15 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Get("/code/symbols", codeH.Symbols)
 	api.Get("/code/callers", codeH.Callers)
 	api.Delete("/workspaces/:id/ttl", func(c *fiber.Ctx) error {
-		if cfg.TTLHours==0 && c.Query("before")=="" { return c.Status(400).JSON(fiber.Map{"error":"TTL disabled or before required"})}
-		before:=c.Query("before")
-		if before=="" { before=time.Now().Add(-time.Duration(cfg.TTLHours)*time.Hour).Format(time.RFC3339) }
-		n,_:=vecStore.TTLDelete(c.Params("id"), before)
-		return c.JSON(fiber.Map{"deleted":n})
+		if cfg.TTLHours == 0 && c.Query("before") == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "TTL disabled or before required"})
+		}
+		before := c.Query("before")
+		if before == "" {
+			before = time.Now().Add(-time.Duration(cfg.TTLHours) * time.Hour).Format(time.RFC3339)
+		}
+		n, _ := vecStore.TTLDelete(c.Params("id"), before)
+		return c.JSON(fiber.Map{"deleted": n})
 	})
 	// Admin hot-swap (no restart)
 	adminH := handlers.NewAdminHandler(embedService, brain)
@@ -323,8 +371,9 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 	api.Post("/workspaces/:workspace_id/chat", chatH.Chat)
 	api.Get("/workspaces/:workspace_id/chat/stream", chatH.ChatStream)
 	api.Post("/workspaces/:workspace_id/peers/:peer_id/representation", func(c *fiber.Ctx) error {
-		ws:=c.Params("workspace_id"); pid:=c.Params("peer_id")
-		text, docs, _:=vecStore.GetRepresentation(ws, pid, c.Query("session_id"), 25)
+		ws := c.Params("workspace_id")
+		pid := c.Params("peer_id")
+		text, docs, _ := vecStore.GetRepresentation(ws, pid, c.Query("session_id"), 25)
 		return c.JSON(fiber.Map{"text": text, "conclusions": docs})
 	})
 
@@ -367,28 +416,40 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 
 	// Session context with rolling-window tokens budgeting
 	api.Get("/workspaces/:workspace_id/sessions/:session_id/context", func(c *fiber.Ctx) error {
-		ws:=c.Params("workspace_id"); sid:=c.Params("session_id")
+		ws := c.Params("workspace_id")
+		sid := c.Params("session_id")
 		budget, _ := parseTokens(c.Query("tokens", "10000"))
-		docs,_:=vecStore.GetMessages(ws, sid, 100, 0)
-		text, _, _:=vecStore.GetRepresentation(ws, "", sid, 25)
+		docs, _ := vecStore.GetMessages(ws, sid, 100, 0)
+		text, _, _ := vecStore.GetRepresentation(ws, "", sid, 25)
 		docs, text = vecStore.FitContextWithinTokens(docs, text, budget)
 		used := 0
-		for _, d := range docs { if doc, ok := d["document"].(string); ok { used += vecStore.EstimateTokens(doc) } }
+		for _, d := range docs {
+			if doc, ok := d["document"].(string); ok {
+				used += vecStore.EstimateTokens(doc)
+			}
+		}
 		used += vecStore.EstimateTokens(text)
 		return c.JSON(fiber.Map{"messages": docs, "representation": text, "tokens_used": used, "tokens_budget": budget})
 	})
 
 	// Sessions missing CRUD
-	api.Put("/sessions/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "clone/sessions stub — use POST /sessions"}) })
+	api.Put("/sessions/:id", func(c *fiber.Ctx) error {
+		return c.Status(501).JSON(fiber.Map{"error": "clone/sessions stub — use POST /sessions"})
+	})
 	api.Delete("/sessions/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "delete not implemented"}) })
-	api.Post("/sessions/:id/clone", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "clone not implemented — use POST /sessions"}) })
+	api.Post("/sessions/:id/clone", func(c *fiber.Ctx) error {
+		return c.Status(501).JSON(fiber.Map{"error": "clone not implemented — use POST /sessions"})
+	})
 
 	// Webhooks (handlers use existing whMgr)
 	whHandler := handlers.NewWebhooksHandler(whMgr)
 	api.Post("/webhooks", whHandler.Register)
 	api.Get("/webhooks", whHandler.List)
 	api.Delete("/webhooks/:id", func(c *fiber.Ctx) error { return c.Status(501).JSON(fiber.Map{"error": "delete not implemented"}) })
-	api.Get("/webhooks/test", func(c *fiber.Ctx) error { whMgr.Fire(c.Query("workspace_id","default"), "test", map[string]string{"ok":"true"}); return c.JSON(fiber.Map{"fired":true}) })
+	api.Get("/webhooks/test", func(c *fiber.Ctx) error {
+		whMgr.Fire(c.Query("workspace_id", "default"), "test", map[string]string{"ok": "true"})
+		return c.JSON(fiber.Map{"fired": true})
+	})
 
 	// gRPC alongside REST (gRPC, Phase 5)
 	go func() {
@@ -425,33 +486,61 @@ api.Get("/metrics", func(c *fiber.Ctx) error {
 }
 
 type rateLimiter struct {
-	mu sync.Mutex; tokens map[string][]time.Time; limit int; window time.Duration
+	mu     sync.Mutex
+	tokens map[string][]time.Time
+	limit  int
+	window time.Duration
 }
+
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 	return &rateLimiter{tokens: make(map[string][]time.Time), limit: limit, window: window}
 }
 func (r *rateLimiter) Allow(key string) bool {
-	r.mu.Lock(); defer r.mu.Unlock()
-	now := time.Now(); cutoff := now.Add(-r.window)
-	times := r.tokens[key]; filtered := times[:0]
-	for _, t := range times { if t.After(cutoff) { filtered = append(filtered, t) } }
-	if len(filtered) >= r.limit { r.tokens[key] = filtered; return false }
-	r.tokens[key] = append(filtered, now); return true
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-r.window)
+	times := r.tokens[key]
+	filtered := times[:0]
+	for _, t := range times {
+		if t.After(cutoff) {
+			filtered = append(filtered, t)
+		}
+	}
+	if len(filtered) >= r.limit {
+		r.tokens[key] = filtered
+		return false
+	}
+	r.tokens[key] = append(filtered, now)
+	return true
 }
 func (r *rateLimiter) AllowWithLimit(key string, limit int) bool {
-	r.mu.Lock(); defer r.mu.Unlock()
-	now := time.Now(); cutoff := now.Add(-r.window)
-	times := r.tokens[key]; filtered := times[:0]
-	for _, t := range times { if t.After(cutoff) { filtered = append(filtered, t) } }
-	if len(filtered) >= limit { r.tokens[key] = filtered; return false }
-	r.tokens[key] = append(filtered, now); return true
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-r.window)
+	times := r.tokens[key]
+	filtered := times[:0]
+	for _, t := range times {
+		if t.After(cutoff) {
+			filtered = append(filtered, t)
+		}
+	}
+	if len(filtered) >= limit {
+		r.tokens[key] = filtered
+		return false
+	}
+	r.tokens[key] = append(filtered, now)
+	return true
 }
 
 func isHealthOrMetrics(path string) bool {
 	return path == "/api/v1/health" || path == "/api/v1/metrics" || path == "/health"
 }
 func parseTokens(s string) (int, error) {
-	if v, err := parseInt(s); err == nil { return v, nil }
+	if v, err := parseInt(s); err == nil {
+		return v, nil
+	}
 	return 10000, nil
 }
 func parseInt(s string) (int, error) {

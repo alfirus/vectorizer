@@ -333,6 +333,8 @@ All settings via `.env` file or environment variables. Key options:
 | `LLM_MODEL` | `qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive` | LLM model for brain |
 | `LLM_API_KEY` | *(empty)* | LM Studio API token (same as `LM_STUDIO_API_KEY`) |
 | `LIBRARIAN_MODE` | `workflow` | Librarian: `workflow` (code tagging+rerank <10ms, default) or `hybrid` (workflow + AI 1.5s cap) |
+| `VAULT_WRITEBACK` | `false` | Mirror stored turns to per-session staging markdown after vector+meta succeed (`10-memory/sessions/<session>.md`, frontmatter `generated_by: vectorizer`, `status: staging`). Async (2s/20-msg batch), idempotent on `message_id`, degrades silently on read-only mount. Enable on server only (`VAULT_WRITEBACK=true` in `.env`); local `:ro` mount keeps it safe. |
+| `VAULT_WRITEBACK_WORKSPACES` | *(empty = all)* | CSV allowlist, e.g. `ws_maisarah,ws_pilotv4` |
 | `RAG_MAX_DISTANCE` | `0.78` | Relevance floor — hits with cosine distance above this are dropped |
 | `RAG_MIN_SCORE` | `0.22` | Same gate as absolute score (`1 − distance`); either knob tunes recall vs precision |
 | `VAULT_ROOT` | `/data/ai` | Vault mount inside Docker |
