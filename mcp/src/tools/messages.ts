@@ -29,25 +29,28 @@ export function registerMessageTools(server: McpServer, getClient: () => Client)
       const data = await getClient().req(`/api/v1/messages?${q}`); return json(data);
     } catch (e) { return err(e); }
   });
-  server.tool("vectorizer_search", "Semantic search (cosine, HNSW) with optional session/role + pagination", {
+  server.tool("vectorizer_search", "Semantic search (cosine, HNSW) with optional session/role + pagination. Hybrid keyword+vector fusion via RRF is ON by default; pass hybrid:false for pure vector.", {
     query: z.string().min(1), workspace_id: z.string().optional(), session_id: z.string().optional(),
     role: z.string().optional(), n_results: z.number().int().min(1).max(100).default(5),
+    hybrid: z.boolean().optional().default(true),
   }, async (a) => {
     try {
-      const where: Record<string,string> = {};
+      const where: Record<string,string|boolean> = {};
       const wid = a.workspace_id ?? getClient().cfg.workspaceId ?? "maisarah";
       where.workspace_id = wid;
       if (a.session_id) where.session_id = a.session_id;
       if (a.role) where.role = a.role;
+      if (a.hybrid !== false) where.hybrid = true;
       const data = await getClient().req("/api/v1/messages/search", { method: "POST", body: JSON.stringify({ query: a.query, n_results: a.n_results, where }) });
       return json(data);
     } catch (e) { return err(e); }
   });
-  server.tool("vectorizer_search_all", "Search across ALL workspaces in parallel (semantic + keyword via RRF)", {
+  server.tool("vectorizer_search_all", "Search across ALL workspaces in parallel (semantic + keyword via RRF). Hybrid fusion is ON by default; pass hybrid:false for pure vector.", {
     query: z.string().min(1), n_results: z.number().int().min(1).max(100).default(5),
+    hybrid: z.boolean().optional().default(true),
   }, async (a) => {
     try {
-      const data = await getClient().req("/api/v1/messages/search/all", { method: "POST", body: JSON.stringify({ query: a.query, n_results: a.n_results }) });
+      const data = await getClient().req("/api/v1/messages/search/all", { method: "POST", body: JSON.stringify({ query: a.query, n_results: a.n_results, hybrid: a.hybrid !== false }) });
       return json(data);
     } catch (e) { return err(e); }
   });

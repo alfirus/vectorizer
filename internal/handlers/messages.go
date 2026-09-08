@@ -281,10 +281,12 @@ func (h *MessagesHandler) GetWorkspaceStats(c *fiber.Ctx) error {
 }
 
 // SearchAllWorkspaces searches across all workspaces in parallel.
+// Hybrid keyword+vector fusion (RRF) is ON by default; pass hybrid:false for pure vector.
 func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 	var req struct {
 		Query    string `json:"query"`
 		NResults int    `json:"n_results"`
+		Hybrid   *bool  `json:"hybrid"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
@@ -302,6 +304,12 @@ func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list workspaces"})
 	}
 
+	// Hybrid defaults ON (MCP bridge sends hybrid:true); explicit false opts out.
+	useHybrid := true
+	if req.Hybrid != nil {
+		useHybrid = *req.Hybrid
+	}
+
 	// Search all workspaces in parallel
 	type searchResult struct {
 		WorkspaceID string
@@ -316,13 +324,23 @@ func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 		wg.Add(1)
 		go func(wsID string) {
 			defer wg.Done()
-			results, err := h.store.SearchWithScope(req.Query, wsID, "", "", "", "", req.NResults*2)
+			var results []models.SearchResult
+			var err error
+			if useHybrid {
+				results, err = h.store.HybridSearchWithScope(req.Query, wsID, "", "", "", "", req.NResults*2)
+			} else {
+				results, err = h.store.SearchWithScope(req.Query, wsID, "", "", "", "", req.NResults*2)
+			}
 			if err != nil {
 				return
 			}
 			mu.Lock()
 			for i := range results {
-				results[i].Source = "semantic"
+				if !useHybrid {
+					// Pure-vector path: store stamps "reranked"; normalize for /search/all parity.
+					results[i].Source = "semantic"
+				}
+				// Hybrid path: keep store labels ("hybrid" fused, "semantic-fallback" degraded).
 				results[i].Score = math.Max(0, 1-float64(results[i].Distance))
 			}
 			allResults = append(allResults, results...)

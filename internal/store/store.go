@@ -626,15 +626,33 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 func (s *Store) HybridSearch(query, workspaceID, sessionID, role string, nResults int) ([]models.SearchResult, error) {
 	return s.HybridSearchWithScope(query, workspaceID, sessionID, role, "", "", nResults)
 }
+
+// hybridScanLimit caps the BM25 doc-scan window: wide enough to cover large
+// workspaces (12k+ docs), small enough to stay cheap — substring counting,
+// no embedding calls.
+const hybridScanLimit = 400
+
+// hybridScanWindow scales the scan with the request but never below the floor
+// that keeps keyword recall alive on big workspaces.
+func hybridScanWindow(nResults int) int {
+	if w := nResults * 4; w > hybridScanLimit {
+		return w
+	}
+	return hybridScanLimit
+}
 func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string, scope string, peerID string, nResults int) ([]models.SearchResult, error) {
 	vec, err := s.SearchWithScope(query, workspaceID, sessionID, role, scope, peerID, nResults*2)
 	if err != nil { return nil, err }
-	// Build BM25 candidates by scanning workspace docs (may be large; limit)
+	// Build BM25 candidates by scanning workspace docs.
+	// Window: substring counting is cheap (no embedding), so scan wide enough
+	// to cover large workspaces. A narrow head-window (e.g. nResults*4 by
+	// insertion order) silently degrades to semantic-only on 10k+ doc
+	// workspaces whenever keywords live outside the oldest chunks.
 	wid := workspaceID
 	if wid == "" { if len(vec)>0 { if v,ok:=vec[0].Metadata["workspace_id"].(string); ok { wid=v } } }
 	var bm25 []models.SearchResult
 	if wid != "" {
-		if docs, err2 := s.GetMessages(wid, sessionID, nResults*4, 0); err2==nil {
+		if docs, err2 := s.GetMessages(wid, sessionID, hybridScanWindow(nResults), 0); err2==nil {
 			for _, d := range docs {
 				doc, _ := d["document"].(string)
 				meta, _ := d["metadata"].(map[string]interface{})
@@ -649,7 +667,10 @@ func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string
 	if len(bm25)==0 {
 		for i := range vec {
 			vec[i].Score = math.Max(0, 1-float64(vec[i].Distance))
-			vec[i].Source = "semantic"
+			// Honest label: fusion was requested but no keyword hits in the
+			// scan window, so these are pure-vector results. Callers can
+			// distinguish degraded fusion from a real hybrid merge.
+			vec[i].Source = "semantic-fallback"
 		}
 		return applyTimeDecay(vec), nil
 	}
