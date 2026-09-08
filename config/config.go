@@ -8,40 +8,45 @@ import (
 )
 
 type Config struct {
-	Port        int    `env:"PORT"`
-	GRPCPort    int    `env:"GRPC_PORT"`
-	ChromaHost  string `env:"CHROMA_HOST"`
-	ChromaPort  int    `env:"CHROMA_PORT"`
+	Port          int    `env:"PORT"`
+	GRPCPort      int    `env:"GRPC_PORT"`
+	ChromaHost    string `env:"CHROMA_HOST"`
+	ChromaPort    int    `env:"CHROMA_PORT"`
 	DefaultAPIKey string `env:"DEFAULT_API_KEY"`
-	
+
 	// Embedding config ( 1536d via Qwen3-Embedding-4B MRL)
-	EmbedProvider   string `env:"EMBED_PROVIDER"` // "lm-studio", "openai-compatible", or "google"
-	LmStudioURL     string `env:"LM_STUDIO_URL"`
+	EmbedProvider    string `env:"EMBED_PROVIDER"` // "lm-studio", "openai-compatible", or "google"
+	LmStudioURL      string `env:"LM_STUDIO_URL"`
 	OAICompatibleURL string `env:"OAI_COMPATIBLE_URL"`
-	OAIAPIKey       string `env:"OAI_API_KEY"`
-	GoogleAPIKey    string `env:"GOOGLE_API_KEY"` // Google AI Studio API key
-	EmbedModel      string `env:"EMBED_MODEL"` // e.g. "Qwen/Qwen3-Embedding-4B-GGUF" or "text-embedding-004"
-	EmbedDimensions int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), 768 for Google
-	
+	OAIAPIKey        string `env:"OAI_API_KEY"`
+	GoogleAPIKey     string `env:"GOOGLE_API_KEY"`   // Google AI Studio API key
+	EmbedModel       string `env:"EMBED_MODEL"`      // e.g. "Qwen/Qwen3-Embedding-4B-GGUF" or "text-embedding-004"
+	EmbedDimensions  int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), 768 for Google
+
 	// LLM Brain config (optional)
-	LLMEnabled        bool   `env:"LLM_ENABLED"`
-	LLMProvider       string `env:"LLM_PROVIDER"` // "lm-studio" or "openai-compatible"
-	LLMLmStudioURL    string `env:"LLM_STUDIO_URL"`
+	LLMEnabled          bool   `env:"LLM_ENABLED"`
+	LLMProvider         string `env:"LLM_PROVIDER"` // "lm-studio" or "openai-compatible"
+	LLMLmStudioURL      string `env:"LLM_STUDIO_URL"`
 	LLMOAICompatibleURL string `env:"LLM_OAI_COMPATIBLE_URL"`
-	LLMOAIAPIKey      string `env:"LLM_OAI_API_KEY"`
-	LLMModel          string `env:"LLM_MODEL"` // e.g. "qwen3:8b" or "gpt-4o-mini"
-	
+	LLMOAIAPIKey        string `env:"LLM_OAI_API_KEY"`
+	LLMModel            string `env:"LLM_MODEL"` // e.g. "qwen3:8b" or "gpt-4o-mini"
+
 	// TTL / workspace config
-	TTLHours       int    `env:"TTL_HOURS"` // 0 = disabled
+	TTLHours        int    `env:"TTL_HOURS"`        // 0 = disabled
 	WorkspaceConfig string `env:"WORKSPACE_CONFIG"` // json overrides
+
+	// Vault writeback: mirror stored turns to per-session staging markdown
+	// after vector+meta succeed. Default OFF — local :ro mount stays safe.
+	VaultWriteback           bool   `env:"VAULT_WRITEBACK"`
+	VaultWritebackWorkspaces string `env:"VAULT_WRITEBACK_WORKSPACES"` // CSV allowlist, empty = all
 
 	// Auth (Compatible JWT)
 	AuthUseAuth   bool   `env:"AUTH_USE_AUTH"`
 	AuthJWTSecret string `env:"AUTH_JWT_SECRET"`
 
 	// ChromaDB config
-	ChromaTenant     string `env:"CHROMA_TENANT"`
-	ChromaDatabase   string `env:"CHROMA_DATABASE"`
+	ChromaTenant   string `env:"CHROMA_TENANT"`
+	ChromaDatabase string `env:"CHROMA_DATABASE"`
 }
 
 type tomlConfig struct {
@@ -50,7 +55,7 @@ type tomlConfig struct {
 	} `toml:"app"`
 	DB struct {
 		Host string `toml:"host"`
-		Port int `toml:"port"`
+		Port int    `toml:"port"`
 	} `toml:"db"`
 	Auth struct {
 		UseAuth   *bool  `toml:"use_auth"`
@@ -95,39 +100,44 @@ func Load() *Config {
 		var raw map[string]interface{}
 		if _, err := toml.DecodeFile("config.toml", &raw); err == nil {
 			if g, ok := raw["grpc"].(map[string]interface{}); ok {
-				if p, ok := g["port"].(int64); ok { grpcPort = int(p) }
+				if p, ok := g["port"].(int64); ok {
+					grpcPort = int(p)
+				}
 			}
 		}
 	}
 	return &Config{
-		GRPCPort: getEnvInt("GRPC_PORT", grpcPort),
-		Port:            getEnvIntWithTOML("PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.App.Port }), 8091),
-		ChromaHost:      getEnvStringWithTOML("CHROMA_HOST", tcStr(tc, func(c *tomlConfig) string { return c.DB.Host }), "localhost"),
-		ChromaPort:      getEnvIntWithTOML("CHROMA_PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.DB.Port }), 8100),
-		DefaultAPIKey:   getEnvStringWithTOML("DEFAULT_API_KEY", tcStr(tc, func(c *tomlConfig) string { return c.Auth.APIKey }), ""),
+		GRPCPort:      getEnvInt("GRPC_PORT", grpcPort),
+		Port:          getEnvIntWithTOML("PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.App.Port }), 8091),
+		ChromaHost:    getEnvStringWithTOML("CHROMA_HOST", tcStr(tc, func(c *tomlConfig) string { return c.DB.Host }), "localhost"),
+		ChromaPort:    getEnvIntWithTOML("CHROMA_PORT", tcAppInt(tc, func(c *tomlConfig) int { return c.DB.Port }), 8100),
+		DefaultAPIKey: getEnvStringWithTOML("DEFAULT_API_KEY", tcStr(tc, func(c *tomlConfig) string { return c.Auth.APIKey }), ""),
 
-		EmbedProvider:   getEnvStringWithTOML("EMBED_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Provider }), "openai-compatible"),
-		LmStudioURL:     getEnvStringWithTOML("LM_STUDIO_URL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.URL }), "http://localhost:1234/v1"),
+		EmbedProvider:    getEnvStringWithTOML("EMBED_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Provider }), "openai-compatible"),
+		LmStudioURL:      getEnvStringWithTOML("LM_STUDIO_URL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.URL }), "http://localhost:1234/v1"),
 		OAICompatibleURL: getEnvString("OAI_COMPATIBLE_URL", ""),
-		OAIAPIKey:       os.Getenv("OAI_API_KEY"),
-		GoogleAPIKey:    os.Getenv("GOOGLE_API_KEY"),
-		EmbedModel:      getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "Qwen/Qwen3-Embedding-4B-GGUF"),
-		EmbedDimensions: getEnvIntWithTOML("EMBED_DIMENSIONS", tcAppInt(tc, func(c *tomlConfig) int { return c.Embedding.Dimensions }), 1536),
+		OAIAPIKey:        os.Getenv("OAI_API_KEY"),
+		GoogleAPIKey:     os.Getenv("GOOGLE_API_KEY"),
+		EmbedModel:       getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "Qwen/Qwen3-Embedding-4B-GGUF"),
+		EmbedDimensions:  getEnvIntWithTOML("EMBED_DIMENSIONS", tcAppInt(tc, func(c *tomlConfig) int { return c.Embedding.Dimensions }), 1536),
 
-		LLMEnabled:        envBoolWithTOML("LLM_ENABLED", tcBool(tc, func(c *tomlConfig) *bool { return c.LLM.Enabled }), false),
-		LLMProvider:       getEnvStringWithTOML("LLM_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Provider }), "lm-studio"),
-		LLMLmStudioURL:    getEnvString("LLM_STUDIO_URL", os.Getenv("LM_STUDIO_URL")),
+		LLMEnabled:          envBoolWithTOML("LLM_ENABLED", tcBool(tc, func(c *tomlConfig) *bool { return c.LLM.Enabled }), false),
+		LLMProvider:         getEnvStringWithTOML("LLM_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Provider }), "lm-studio"),
+		LLMLmStudioURL:      getEnvString("LLM_STUDIO_URL", os.Getenv("LM_STUDIO_URL")),
 		LLMOAICompatibleURL: getEnvString("LLM_OAI_COMPATIBLE_URL", ""),
-		LLMOAIAPIKey:      os.Getenv("LLM_OAI_API_KEY"),
-		LLMModel:          getEnvStringWithTOML("LLM_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Model }), "qwen3:8b"),
+		LLMOAIAPIKey:        os.Getenv("LLM_OAI_API_KEY"),
+		LLMModel:            getEnvStringWithTOML("LLM_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Model }), "qwen3:8b"),
 
-		TTLHours:       getEnvInt("TTL_HOURS", 0),
+		TTLHours: getEnvInt("TTL_HOURS", 0),
 
-		AuthUseAuth:    envBoolWithTOML("AUTH_USE_AUTH", tcBool(tc, func(c *tomlConfig) *bool { return c.Auth.UseAuth }), false),
-		AuthJWTSecret:  getEnvStringWithTOML("AUTH_JWT_SECRET", tcStr(tc, func(c *tomlConfig) string { return c.Auth.JWTSecret }), ""),
+		VaultWriteback:           envBool("VAULT_WRITEBACK", false),
+		VaultWritebackWorkspaces: getEnvString("VAULT_WRITEBACK_WORKSPACES", ""),
 
-		ChromaTenant:     getEnvString("CHROMA_TENANT", "default_tenant"),
-		ChromaDatabase:   getEnvString("CHROMA_DATABASE", "default_database"),
+		AuthUseAuth:   envBoolWithTOML("AUTH_USE_AUTH", tcBool(tc, func(c *tomlConfig) *bool { return c.Auth.UseAuth }), false),
+		AuthJWTSecret: getEnvStringWithTOML("AUTH_JWT_SECRET", tcStr(tc, func(c *tomlConfig) string { return c.Auth.JWTSecret }), ""),
+
+		ChromaTenant:   getEnvString("CHROMA_TENANT", "default_tenant"),
+		ChromaDatabase: getEnvString("CHROMA_DATABASE", "default_database"),
 	}
 }
 

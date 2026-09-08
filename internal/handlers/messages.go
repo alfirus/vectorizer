@@ -8,39 +8,56 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/models"
+	"github.com/alfirus/vectorizer/internal/security"
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
 // MessagesHandler handles message storage and retrieval.
 type MessagesHandler struct {
-	store    *store.Store
-	deriver  interface{ Enqueue(string,string,string,string,string) }
-	webhooks interface{ Fire(string,string,interface{}) }
+	store   *store.Store
+	deriver interface {
+		Enqueue(string, string, string, string, string)
+	}
+	writeback interface {
+		Enqueue(string, string, string, string, string, time.Time)
+	}
+	webhooks interface {
+		Fire(string, string, interface{})
+	}
 }
 
 func NewMessagesHandler(store *store.Store) *MessagesHandler {
 	return &MessagesHandler{store: store}
 }
-func (h *MessagesHandler) SetDeriver(d interface{ Enqueue(string,string,string,string,string) }) { h.deriver = d }
-func (h *MessagesHandler) SetWebhooks(w interface{ Fire(string,string,interface{}) }) { h.webhooks = w }
+func (h *MessagesHandler) SetDeriver(d interface {
+	Enqueue(string, string, string, string, string)
+}) { h.deriver = d }
+func (h *MessagesHandler) SetWriteback(w interface {
+	Enqueue(string, string, string, string, string, time.Time)
+}) { h.writeback = w }
+func (h *MessagesHandler) SetWebhooks(w interface {
+	Fire(string, string, interface{})
+}) { h.webhooks = w }
 
 // AddMessage stores a new message with embedding.
 func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-		SessionID   string `json:"session_id"`
-		Role        string `json:"role"`
-		Content     string `json:"content"`
-		Scope       string `json:"scope,omitempty"`
+		WorkspaceID string                 `json:"workspace_id"`
+		SessionID   string                 `json:"session_id"`
+		Role        string                 `json:"role"`
+		Content     string                 `json:"content"`
+		Scope       string                 `json:"scope,omitempty"`
 		PeerID      string                 `json:"peer_id,omitempty"`
 		Metadata    map[string]interface{} `json:"metadata,omitempty"`
 	}
-	if err := c.BodyParser(&req); err != nil { return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"}) }
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
 	if req.WorkspaceID == "" || req.SessionID == "" || req.Role == "" || req.Content == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id, session_id, role, and content are required"})
 	}
@@ -51,7 +68,9 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 		}
 	}
 	for _, n := range []string{req.WorkspaceID, req.SessionID} {
-		if !models.ValidateResourceName(n) { return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id format"}) }
+		if !models.ValidateResourceName(n) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id format"})
+		}
 	}
 	req.Content = models.SanitizeString(req.Content)
 
@@ -64,9 +83,15 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	msg := models.NewMessage(req.WorkspaceID, req.SessionID, req.Role, req.Content)
 	if req.Scope != "" || req.PeerID != "" || len(req.Metadata) > 0 {
 		msg.Metadata = map[string]interface{}{}
-		if req.Scope != "" { msg.Metadata["scope"] = req.Scope }
-		if req.PeerID != "" { msg.Metadata["peer_id"] = req.PeerID }
-		for k, v := range req.Metadata { msg.Metadata[k] = v }
+		if req.Scope != "" {
+			msg.Metadata["scope"] = req.Scope
+		}
+		if req.PeerID != "" {
+			msg.Metadata["peer_id"] = req.PeerID
+		}
+		for k, v := range req.Metadata {
+			msg.Metadata[k] = v
+		}
 	}
 	if len(msg.Content) > 100000 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content too large (max 100k chars)"})
@@ -77,15 +102,23 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to store message"})
 	}
 	store.GlobalMetrics.MessagesAdded.Add(1)
-	if h.deriver != nil { h.deriver.Enqueue(msg.WorkspaceID, msg.SessionID, req.PeerID, msg.ID, msg.Content) }
-	if h.webhooks != nil { h.webhooks.Fire(msg.WorkspaceID, "message.created", map[string]string{"id": msg.ID, "session_id": msg.SessionID}) }
+	if h.deriver != nil {
+		h.deriver.Enqueue(msg.WorkspaceID, msg.SessionID, req.PeerID, msg.ID, msg.Content)
+	}
+	// Vault writeback: after vector+meta succeed, mirror to staging markdown (async, never blocks).
+	if h.writeback != nil {
+		h.writeback.Enqueue(msg.WorkspaceID, msg.SessionID, msg.ID, msg.Role, req.Content, msg.CreatedAt)
+	}
+	if h.webhooks != nil {
+		h.webhooks.Fire(msg.WorkspaceID, "message.created", map[string]string{"id": msg.ID, "session_id": msg.SessionID})
+	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"id":          msg.ID,
+		"id":           msg.ID,
 		"workspace_id": msg.WorkspaceID,
-		"session_id":  msg.SessionID,
-		"role":        msg.Role,
-		"stored":      true,
+		"session_id":   msg.SessionID,
+		"role":         msg.Role,
+		"stored":       true,
 	})
 }
 
@@ -93,14 +126,14 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 	var req struct {
 		WorkspaceID string `json:"workspace_id"`
-		Messages []struct {
+		Messages    []struct {
 			WorkspaceID string                 `json:"workspace_id"`
-			SessionID string                 `json:"session_id"`
-			Role      string                 `json:"role"`
-			Content   string                 `json:"content"`
-			Scope     string                 `json:"scope,omitempty"`
-			PeerID    string                 `json:"peer_id,omitempty"`
-			Metadata  map[string]interface{} `json:"metadata,omitempty"`
+			SessionID   string                 `json:"session_id"`
+			Role        string                 `json:"role"`
+			Content     string                 `json:"content"`
+			Scope       string                 `json:"scope,omitempty"`
+			PeerID      string                 `json:"peer_id,omitempty"`
+			Metadata    map[string]interface{} `json:"metadata,omitempty"`
 		} `json:"messages"`
 	}
 	if err := c.BodyParser(&req); err != nil {
@@ -147,10 +180,16 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 		m := models.NewMessage(wsID, sessionID, msg.Role, models.SanitizeString(msg.Content))
 		if msg.Scope != "" || msg.PeerID != "" || len(msg.Metadata) > 0 {
 			m.Metadata = map[string]interface{}{}
-			if msg.Scope != "" { m.Metadata["scope"] = msg.Scope }
-			if msg.PeerID != "" { m.Metadata["peer_id"] = msg.PeerID }
+			if msg.Scope != "" {
+				m.Metadata["scope"] = msg.Scope
+			}
+			if msg.PeerID != "" {
+				m.Metadata["peer_id"] = msg.PeerID
+			}
 			for k, v := range msg.Metadata {
-				if k == "scope" || k == "peer_id" { continue }
+				if k == "scope" || k == "peer_id" {
+					continue
+				}
 				m.Metadata[k] = v
 			}
 		}
@@ -164,14 +203,22 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 			continue
 		}
 		store.GlobalMetrics.MessagesAdded.Add(1)
-		if h.deriver != nil { h.deriver.Enqueue(m.WorkspaceID, m.SessionID, msg.PeerID, m.ID, m.Content) }
-		if h.webhooks != nil { h.webhooks.Fire(m.WorkspaceID, "message.created", map[string]string{"id": m.ID, "session_id": m.SessionID}) }
+		if h.deriver != nil {
+			h.deriver.Enqueue(m.WorkspaceID, m.SessionID, msg.PeerID, m.ID, m.Content)
+		}
+		// Vault writeback: after vector+meta succeed, mirror to staging markdown (async, never blocks).
+		if h.writeback != nil {
+			h.writeback.Enqueue(m.WorkspaceID, m.SessionID, m.ID, m.Role, msg.Content, m.CreatedAt)
+		}
+		if h.webhooks != nil {
+			h.webhooks.Fire(m.WorkspaceID, "message.created", map[string]string{"id": m.ID, "session_id": m.SessionID})
+		}
 
 		results = append(results, fiber.Map{
-			"id":          m.ID,
-			"session_id":  sessionID,
-			"role":        msg.Role,
-			"stored":      true,
+			"id":         m.ID,
+			"session_id": sessionID,
+			"role":       msg.Role,
+			"stored":     true,
 		})
 	}
 
@@ -204,18 +251,37 @@ func (h *MessagesHandler) SearchMessages(c *fiber.Ctx) error {
 
 	var wID, sID, role, scope, peerID string
 	if req.Where != nil {
-		if v, ok := req.Where["workspace_id"].(string); ok { wID = v }
-		if v, ok := req.Where["session_id"].(string); ok { sID = v }
-		if v, ok := req.Where["role"].(string); ok { role = v }
-		if v, ok := req.Where["scope"].(string); ok { scope = v }
-		if v, ok := req.Where["peer_id"].(string); ok { peerID = v }
+		if v, ok := req.Where["workspace_id"].(string); ok {
+			wID = v
+		}
+		if v, ok := req.Where["session_id"].(string); ok {
+			sID = v
+		}
+		if v, ok := req.Where["role"].(string); ok {
+			role = v
+		}
+		if v, ok := req.Where["scope"].(string); ok {
+			scope = v
+		}
+		if v, ok := req.Where["peer_id"].(string); ok {
+			peerID = v
+		}
 	}
 	hybrid := false
-	if v, ok := req.Where["hybrid"].(bool); ok { hybrid = v }
+	if v, ok := req.Where["hybrid"].(bool); ok {
+		hybrid = v
+	}
 	var results []models.SearchResult
 	var err2 error
-	if hybrid { results, err2 = h.store.HybridSearchWithScope(req.Query, wID, sID, role, scope, peerID, nResults) } else { results, err2 = h.store.SearchWithScope(req.Query, wID, sID, role, scope, peerID, nResults) }
-	if err2 != nil { fmt.Printf("Error searching: %v\n", err2); return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"}) }
+	if hybrid {
+		results, err2 = h.store.HybridSearchWithScope(req.Query, wID, sID, role, scope, peerID, nResults)
+	} else {
+		results, err2 = h.store.SearchWithScope(req.Query, wID, sID, role, scope, peerID, nResults)
+	}
+	if err2 != nil {
+		fmt.Printf("Error searching: %v\n", err2)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"})
+	}
 	return c.JSON(fiber.Map{"results": results, "count": len(results)})
 }
 
@@ -241,8 +307,15 @@ func (h *MessagesHandler) SearchMessagesSimple(c *fiber.Ctx) error {
 
 	var results2 []models.SearchResult
 	var err3 error
-	if c.Query("hybrid")=="true" { results2, err3 = h.store.HybridSearchWithScope(query, workspaceID, sessionID, role, scope, peerID, nResults) } else { results2, err3 = h.store.SearchWithScope(query, workspaceID, sessionID, role, scope, peerID, nResults) }
-	if err3 != nil { fmt.Printf("Error searching: %v\n", err3); return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"}) }
+	if c.Query("hybrid") == "true" {
+		results2, err3 = h.store.HybridSearchWithScope(query, workspaceID, sessionID, role, scope, peerID, nResults)
+	} else {
+		results2, err3 = h.store.SearchWithScope(query, workspaceID, sessionID, role, scope, peerID, nResults)
+	}
+	if err3 != nil {
+		fmt.Printf("Error searching: %v\n", err3)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"})
+	}
 	return c.JSON(fiber.Map{"results": results2, "count": len(results2)})
 }
 
@@ -253,8 +326,12 @@ func (h *MessagesHandler) ListMessages(c *fiber.Ctx) error {
 	}
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
-	if limit <= 0 || limit > 100 { limit = 20 }
-	if offset < 0 { offset = 0 }
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	docs, err := h.store.GetMessages(wsID, c.Query("session_id"), limit, offset)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list messages"})
@@ -281,10 +358,12 @@ func (h *MessagesHandler) GetWorkspaceStats(c *fiber.Ctx) error {
 }
 
 // SearchAllWorkspaces searches across all workspaces in parallel.
+// Hybrid keyword+vector fusion (RRF) is ON by default; pass hybrid:false for pure vector.
 func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 	var req struct {
 		Query    string `json:"query"`
 		NResults int    `json:"n_results"`
+		Hybrid   *bool  `json:"hybrid"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
@@ -302,6 +381,12 @@ func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list workspaces"})
 	}
 
+	// Hybrid defaults ON (MCP bridge sends hybrid:true); explicit false opts out.
+	useHybrid := true
+	if req.Hybrid != nil {
+		useHybrid = *req.Hybrid
+	}
+
 	// Search all workspaces in parallel
 	type searchResult struct {
 		WorkspaceID string
@@ -316,13 +401,23 @@ func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 		wg.Add(1)
 		go func(wsID string) {
 			defer wg.Done()
-			results, err := h.store.SearchWithScope(req.Query, wsID, "", "", "", "", req.NResults*2)
+			var results []models.SearchResult
+			var err error
+			if useHybrid {
+				results, err = h.store.HybridSearchWithScope(req.Query, wsID, "", "", "", "", req.NResults*2)
+			} else {
+				results, err = h.store.SearchWithScope(req.Query, wsID, "", "", "", "", req.NResults*2)
+			}
 			if err != nil {
 				return
 			}
 			mu.Lock()
 			for i := range results {
-				results[i].Source = "semantic"
+				if !useHybrid {
+					// Pure-vector path: store stamps "reranked"; normalize for /search/all parity.
+					results[i].Source = "semantic"
+				}
+				// Hybrid path: keep store labels ("hybrid" fused, "semantic-fallback" degraded).
 				results[i].Score = math.Max(0, 1-float64(results[i].Distance))
 			}
 			allResults = append(allResults, results...)
