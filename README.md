@@ -17,7 +17,7 @@ Now with **markdown vault + file-graph + workflow librarian** — truth is markd
 - **11-field flat metadata** — `source_type, source_path, header_path, chunk_type, created_at, tags, importance, agent, language, parent_doc_id, doc_title` — auto-filled by markdown parser + workflow, no hallucination
 - **File-graph** — `vault/00-index/GRAPH.json` + in-memory BFS — file-based, no Postgres — nodes `doc/chunk/entity/folder`, edges `belongs_to/next_chunk/mentions/links_to`
 - **Workflow librarian** — tagging + rerank are code, not LLM: `header_path+folder → tags/entities/summary_1line` and `vector 0.55 + BM25 0.25 + importance 0.08 + entityOverlap 0.07 + recency 0.05` — ~150ms vs 1.5s AI rerank; `LIBRARIAN_MODE=workflow|hybrid`
-- **Semantic + hybrid search** — vector cosine (HNSW) + BM25 RRF, `?hybrid=true`, temporal `after`/`before`, `grep` + `temporal` endpoints, workflow rerank built-in
+- **Semantic + hybrid search** — vector cosine (HNSW) + identifier-aware BM25 RRF fusion, temporal `after`/`before`, `grep` + `temporal` endpoints, workflow rerank built-in — hybrid ON by default on `/search/all` + MCP tools (`hybrid:false` opts out); single-workspace opts in via `where.hybrid=true` / `?hybrid=true`. Per-hit `source` is honest: `hybrid` (fused) vs `semantic-fallback` (no keyword hits, pure-vector returned)
 - **Peers + peer cards** — `POST /workspaces/:id/peers`, `PUT /peers/:peer_id/card`
 - **Agentic dialectic chat** — `POST /workspaces/:id/chat` (observer/observed, `reasoning_level` none/low/medium/high/max, 5 tools: `search_memory`, `search_messages`, `grep_messages`, `get_reasoning_chain`, `get_observation_context`, SSE streaming)
 - **Reasoning graph + deriver** — `ws_<id>_reasoning` (premise edges, BFS `GetReasoningChain`), async deriver `2s/5msg` batch → `summarize→CreateConclusion+AddReasoningEdge`
@@ -431,7 +431,7 @@ Content-Type: application/json
 }
 ```
 
-Search across messages using semantic similarity. Pipeline: `embed query 768d → HNSW cosine → graph 1-hop (GRAPH.json, 5 neighbors) → WorkflowRerankScore (vector 0.55 + BM25 0.25 + importance 0.08 + entityOverlap 0.07) → top-k`.
+Search across messages using semantic similarity. Pipeline: `embed query 768d → HNSW cosine → graph 1-hop (GRAPH.json, 5 neighbors) → WorkflowRerankScore (vector 0.55 + BM25 0.25 + importance 0.08 + entityOverlap 0.07) → top-k`. Pass `where.hybrid=true` (JSON) or `?hybrid=true` (query params) to fuse vector + identifier-aware BM25 via RRF instead of pure vector.
 
 ### Semantic Search (Query Params)
 
@@ -451,7 +451,7 @@ Content-Type: application/json
 }
 ```
 
-Searches all workspaces in parallel, merges via RRF fusion, returns results sorted by score.
+Searches all workspaces in parallel, merges via RRF fusion, returns results sorted by score. **Hybrid fusion (vector + identifier-aware BM25) is ON by default** — pass `"hybrid": false` to opt out into pure-vector search. Per-hit `source` tells you which path fired: `hybrid` (BM25+vector fused) or `semantic-fallback` (fusion requested but no keyword hits — pure-vector results returned, don't mistake for fused).
 
 ### LLM Brain — Summarize
 
@@ -584,6 +584,8 @@ MCP (Claude Desktop, OpenCode, OpenClaw, Hermes via `mcp-remote`):
 ```
 
 SDKs: `sdks/typescript` (`@vectorizer/sdk`) + `sdks/python` (`vectorizer-ai`) — `new Vectorizer({baseUrl, apiKey}).search("...")`.
+
+MCP search tools (`vectorizer_search`, `vectorizer_search_all`) send `hybrid:true` by default — old clients get fusion with no update; `hybrid:false` opts out.
 
 ## Development
 
