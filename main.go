@@ -167,7 +167,7 @@ func main() {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: allowedOrigins,
 		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-API-Key",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-API-Key,X-Source,X-Agent",
 	}))
 
 	// Auth: JWT (if AUTH_USE_AUTH=true) else legacy X-API-Key. Workspace-scoped JWT auth.
@@ -246,7 +246,7 @@ func main() {
 				source = store.SourceAPI
 			}
 			ws := c.Query("workspace_id", c.Params("workspace_id", c.Params("id")))
-			store.GlobalUsage.Record(action, source, ws)
+			store.GlobalUsage.Record(action, source, c.Get("X-Agent"), ws)
 		}
 		return c.Next()
 	})
