@@ -85,23 +85,33 @@ type DayUsage struct {
 	Total       int            `json:"total"`
 	BySource    map[string]int `json:"by_source"`
 	ByAgent     map[string]int `json:"by_agent,omitempty"`
+	// ByAgentAction is the per-agent action mix (agent -> action -> count),
+	// powering "Daily Usage By Agent": how much each agent searched, stored, etc.
+	ByAgentAction map[string]map[string]int `json:"by_agent_action,omitempty"`
 	ByWorkspace map[string]int `json:"by_workspace,omitempty"`
 }
 
 func (d *DayUsage) add(action, source, agent, workspace string) {
+	canon := UsageOther
 	switch action {
 	case UsageSearch:
 		d.Searches++
+		canon = UsageSearch
 	case UsageStore:
 		d.Stores++
+		canon = UsageStore
 	case UsageAsk:
 		d.Ask++
+		canon = UsageAsk
 	case UsageChat:
 		d.Chat++
+		canon = UsageChat
 	case UsageCode:
 		d.Code++
+		canon = UsageCode
 	case UsageUpload:
 		d.Upload++
+		canon = UsageUpload
 	default:
 		d.Other++
 	}
@@ -113,7 +123,15 @@ func (d *DayUsage) add(action, source, agent, workspace string) {
 	if d.ByAgent == nil {
 		d.ByAgent = map[string]int{}
 	}
-	d.ByAgent[sanitizeAgent(agent, source)]++
+	agent = sanitizeAgent(agent, source)
+	d.ByAgent[agent]++
+	if d.ByAgentAction == nil {
+		d.ByAgentAction = map[string]map[string]int{}
+	}
+	if d.ByAgentAction[agent] == nil {
+		d.ByAgentAction[agent] = map[string]int{}
+	}
+	d.ByAgentAction[agent][canon]++
 	if workspace != "" {
 		if d.ByWorkspace == nil {
 			d.ByWorkspace = map[string]int{}
