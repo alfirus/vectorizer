@@ -1,0 +1,21 @@
+# Runtime data — server-side, gigabytes, never part of the image
+vault-data/
+data/
+*.db
+*.sqlite*
+*.sqlite-shm
+*.sqlite-wal
+
+# Version control
+.git
+.gitignore
+
+# Local/dev artifacts
+vectorizer.exe
+*.log
+*.out
+docker-compose.override.yml
+
+# Deps rebuilt inside the image (Dockerfile.mcp runs its own npm ci)
+mcp/node_modules/
+node_modules/
