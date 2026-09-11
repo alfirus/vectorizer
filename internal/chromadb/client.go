@@ -168,7 +168,7 @@ func (c *Client) Query(collectionID string, queryEmbeddings [][]float32, nResult
 		"n_results":        nResults,
 	}
 	if where != nil {
-		body["where"] = where
+		body["where"] = normalizeWhere(where)
 	}
 	if include == nil {
 		include = []string{"documents", "metadatas", "distances"}
@@ -284,11 +284,32 @@ func (c *Client) DeleteByFilter(collectionID string, where map[string]interface{
 	return nil
 }
 
+// normalizeWhere rewrites a multi-key equality map into Chroma's $and form.
+// Chroma's where validator allows exactly one top-level key; sending two
+// plain fields (e.g. workspace_id + session_id) returns 400 Bad Request,
+// which surfaces to API callers as HTTP 500.
+func normalizeWhere(where map[string]interface{}) map[string]interface{} {
+	if len(where) <= 1 {
+		return where
+	}
+	if _, ok := where["$and"]; ok && len(where) == 1 {
+		return where
+	}
+	if _, ok := where["$or"]; ok && len(where) == 1 {
+		return where
+	}
+	conds := make([]map[string]interface{}, 0, len(where))
+	for k, v := range where {
+		conds = append(conds, map[string]interface{}{k: v})
+	}
+	return map[string]interface{}{"$and": conds}
+}
+
 // GetDocuments fetches documents with optional where filter and pagination.
 func (c *Client) GetDocuments(collectionID string, where map[string]interface{}, limit, offset int) ([]map[string]interface{}, error) {
 	body := map[string]interface{}{}
 	if where != nil {
-		body["where"] = where
+		body["where"] = normalizeWhere(where)
 	}
 	if limit > 0 {
 		body["limit"] = limit
