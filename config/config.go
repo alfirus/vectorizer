@@ -44,6 +44,11 @@ type Config struct {
 	AuthUseAuth   bool   `env:"AUTH_USE_AUTH"`
 	AuthJWTSecret string `env:"AUTH_JWT_SECRET"`
 
+	// Attribution: when true, usage-tracked API calls without an X-Agent
+	// header are rejected (400) instead of falling back to the channel name.
+	// Default OFF so existing unattributed clients keep working.
+	RequireXAgent bool `env:"REQUIRE_X_AGENT"`
+
 	// ChromaDB config
 	ChromaTenant   string `env:"CHROMA_TENANT"`
 	ChromaDatabase string `env:"CHROMA_DATABASE"`
@@ -135,6 +140,8 @@ func Load() *Config {
 
 		AuthUseAuth:   envBoolWithTOML("AUTH_USE_AUTH", tcBool(tc, func(c *tomlConfig) *bool { return c.Auth.UseAuth }), false),
 		AuthJWTSecret: getEnvStringWithTOML("AUTH_JWT_SECRET", tcStr(tc, func(c *tomlConfig) string { return c.Auth.JWTSecret }), ""),
+
+		RequireXAgent: envBool("REQUIRE_X_AGENT", false),
 
 		ChromaTenant:   getEnvString("CHROMA_TENANT", "default_tenant"),
 		ChromaDatabase: getEnvString("CHROMA_DATABASE", "default_database"),

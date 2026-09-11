@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,6 +240,12 @@ func main() {
 	// so dashboard polling can't drown out real agent signal.
 	app.Use(func(c *fiber.Ctx) error {
 		if action, ok := store.ClassifyUsage(c.Method(), c.Path()); ok {
+			// Compulsory attribution (REQUIRE_X_AGENT=true): every real agent
+			// call must carry its own name. Telemetry paths never reach here
+			// (ClassifyUsage excludes them), so dashboard polling is unaffected.
+			if cfg.RequireXAgent && strings.TrimSpace(c.Get("X-Agent")) == "" {
+				return c.Status(400).JSON(fiber.Map{"error": "missing X-Agent header (agent identity is compulsory)"})
+			}
 			source := c.Get("X-Source")
 			switch source {
 			case store.SourceMCP, store.SourceDashboard:
