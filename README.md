@@ -322,6 +322,7 @@ All settings via `.env` file or environment variables. Key options:
 | `CHROMA_HOST` | `localhost` | ChromaDB hostname |
 | `CHROMA_PORT` | `8100` | ChromaDB port |
 | `DEFAULT_API_KEY` | *(empty)* | API key for auth (set to enable) |
+| `REQUIRE_X_AGENT` | `false` | Compulsory agent identity: usage-tracked calls without `X-Agent` get `400` (see Agent Attribution) |
 | `EMBED_PROVIDER` | `openai-compatible` | Embedding provider: `google`, `openai-compatible`, `lm-studio` |
 | `LM_STUDIO_URL` | `http://host.docker.internal:1234/v1` | LM Studio endpoint |
 | `LM_STUDIO_API_KEY` | *(empty)* | LM Studio API token (`sk-lm-...`) — required when LM Studio auth is enabled |
@@ -548,6 +549,47 @@ curl -H "X-API-Key: vectorizer-local-key" \
 ```
 
 Health check (`/api/v1/health`) is always public.
+
+## Agent Attribution — X-Agent (compulsory)
+
+Every agent call carries its own name in the `X-Agent` header. The dashboard's
+**Daily Usage By Agent** chart is built from it — per agent, per day, per action
+(how much Shiela stored, how much Sofia searched, and such).
+
+```bash
+curl -H "X-API-Key: vector...key" -H "X-Agent: shiela" \
+  "http://localhost:8091/api/v1/search?workspace_id=ws-abc123&query=hello"
+```
+
+How each client sets it:
+
+- **Direct API calls** — send the header: `X-Agent: shiela`.
+- **MCP stdio** (agent runs its own bridge) — env: `VECTORIZER_AGENT_NAME=shiela`
+  (`AGENT_NAME` also works). The bridge stamps `X-Agent` on every backend call.
+- **Shared HTTP bridge** (`:8093/mcp`) — each agent's MCP client sends
+  `X-Agent: <name>` on its MCP requests; the bridge forwards it per request, so
+  all agents can share one bridge and still show up as themselves. Hermes
+  profiles: `headers: {X-Agent: <name>}` next to the `Authorization` bearer.
+  Do NOT set `VECTORIZER_AGENT_NAME` on a shared bridge — one name there would
+  misattribute everyone behind it.
+- **Dashboard** identifies as `X-Agent: dashboard`; `X-Source: dashboard` marks
+  the channel.
+
+Names are normalized server-side: lowercase, letters/numbers/`-`/`_` only, max
+32 chars (`Shiela` → `shiela`). Calls with no header still work — they are
+attributed to the channel (`mcp`, `api`) so old log lines and clients degrade
+gracefully.
+
+Strict mode (drops the fallback — unattributed calls fail instead):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REQUIRE_X_AGENT` | `false` | Backend: usage-tracked calls without `X-Agent` get `400`. Telemetry (health/metrics/usage reads) is never affected. |
+| `MCP_REQUIRE_X_AGENT` | `false` | Bridge (`:8093`): `POST /mcp` without caller `X-Agent` gets `400`, unless the bridge has its own `VECTORIZER_AGENT_NAME` default. |
+
+Rollout order: give every agent its name first, confirm real names in Daily Usage
+By Agent, then flip the switches. Flipping early breaks unattributed clients
+(their memory calls start failing).
 
 ## Workspace Isolation
 

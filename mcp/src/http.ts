@@ -9,12 +9,15 @@
 //   MCP_BEARER_TOKEN (required — refuse to start without it)
 //   VECTORIZER_URL / VECTORIZER_API_KEY (same as stdio)
 //   VECTORIZER_AGENT_NAME / AGENT_NAME (default X-Agent when caller sends none)
+//   MCP_REQUIRE_X_AGENT=true (reject POST /mcp without caller X-Agent —
+//     unattributed callers get 400 unless this bridge has a default above)
 //
 // Callers can send X-Agent on the MCP POST to attribute Vectorizer usage
 // to themselves — surfaced as "Daily Usage By Agent" in the dashboard.
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "./server.js";
+import { parseConfig } from "./config.js";
 
 const PORT = Number(process.env.MCP_HTTP_PORT ?? 8093);
 const HOST = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
@@ -47,6 +50,13 @@ app.post("/mcp", async (req, res) => {
   // Forward the caller's X-Agent (if any) so Vectorizer usage attribution
   // follows the real agent, not just the shared bridge.
   const agentName = typeof req.headers["x-agent"] === "string" ? req.headers["x-agent"] : undefined;
+  // Compulsory attribution (MCP_REQUIRE_X_AGENT=true): refuse unattributed
+  // callers unless this bridge itself carries a default (VECTORIZER_AGENT_NAME).
+  // Default OFF so existing clients keep working until they send X-Agent.
+  if (process.env.MCP_REQUIRE_X_AGENT === "true" && !agentName?.trim() && !parseConfig().agentName) {
+    res.status(400).json({ error: "missing X-Agent header (agent identity is compulsory)" });
+    return;
+  }
   const server = createServer({ agentName });
   try {
     const transport = new StreamableHTTPServerTransport({
