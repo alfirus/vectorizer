@@ -6,9 +6,12 @@ import { registerBrainTools } from "./tools/brain.js";
 import { registerPeerTools } from "./tools/peers.js";
 import { registerCodeTools } from "./tools/code.js";
 
-export function createServer() {
+export function createServer(opts?: { agentName?: string }) {
   const server = new McpServer({ name: "@vectorizer/mcp", version: "0.2.0" });
-  const cfg = parseConfig();
+  const base = parseConfig();
+  // Per-request override (HTTP bridge forwards the caller's X-Agent);
+  // stdio mode uses VECTORIZER_AGENT_NAME / AGENT_NAME from env.
+  const cfg = opts?.agentName ? { ...base, agentName: opts.agentName } : base;
   const getClient = () => createClient(cfg);
   registerWorkspaceTools(server, getClient);
   registerMessageTools(server, getClient);

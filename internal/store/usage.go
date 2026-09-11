@@ -38,11 +38,37 @@ const (
 	SourceAPI       = "api"
 )
 
+// sanitizeAgent keeps the X-Agent caller label safe for JSON keys and the
+// dashboard: lowercase alphanumerics plus - and _, max 32 chars.
+// Empty input falls back to the source so "Daily Usage By Agent" degrades
+// gracefully for old log lines and clients that don't send X-Agent yet.
+func sanitizeAgent(agent, source string) string {
+	a := strings.ToLower(strings.TrimSpace(agent))
+	var b strings.Builder
+	for _, r := range a {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	s := b.String()
+	if len(s) > 32 {
+		s = s[:32]
+	}
+	if s == "" {
+		if source != "" {
+			return source
+		}
+		return SourceAPI
+	}
+	return s
+}
+
 // UsageEvent is one logged API call.
 type UsageEvent struct {
 	TS        time.Time `json:"ts"`
 	Action    string    `json:"action"`
 	Source    string    `json:"source"`
+	Agent     string    `json:"agent,omitempty"`
 	Workspace string    `json:"workspace,omitempty"`
 }
 
@@ -58,10 +84,11 @@ type DayUsage struct {
 	Other       int            `json:"other"`
 	Total       int            `json:"total"`
 	BySource    map[string]int `json:"by_source"`
+	ByAgent     map[string]int `json:"by_agent,omitempty"`
 	ByWorkspace map[string]int `json:"by_workspace,omitempty"`
 }
 
-func (d *DayUsage) add(action, source, workspace string) {
+func (d *DayUsage) add(action, source, agent, workspace string) {
 	switch action {
 	case UsageSearch:
 		d.Searches++
@@ -83,6 +110,10 @@ func (d *DayUsage) add(action, source, workspace string) {
 		d.BySource = map[string]int{}
 	}
 	d.BySource[source]++
+	if d.ByAgent == nil {
+		d.ByAgent = map[string]int{}
+	}
+	d.ByAgent[sanitizeAgent(agent, source)]++
 	if workspace != "" {
 		if d.ByWorkspace == nil {
 			d.ByWorkspace = map[string]int{}
@@ -189,7 +220,7 @@ func (u *UsageTracker) replayAndTrim() {
 		}
 		kept = append(kept, line)
 		d := u.dayFor(day)
-		d.add(ev.Action, ev.Source, ev.Workspace)
+		d.add(ev.Action, ev.Source, ev.Agent, ev.Workspace)
 	}
 	if trimmed {
 		_ = os.WriteFile(u.path, []byte(strings.Join(kept, "\n")+(func() string {
@@ -211,18 +242,19 @@ func (u *UsageTracker) dayFor(day string) *DayUsage {
 }
 
 // Record logs one API call. Never blocks the request on disk errors.
-func (u *UsageTracker) Record(action, source, workspace string) {
+func (u *UsageTracker) Record(action, source, agent, workspace string) {
 	if action == "" {
 		return
 	}
 	if source == "" {
 		source = SourceAPI
 	}
+	agent = sanitizeAgent(agent, source)
 	now := time.Now().UTC()
 	u.mu.Lock()
-	u.dayFor(u.dayKey(now)).add(action, source, workspace)
+	u.dayFor(u.dayKey(now)).add(action, source, agent, workspace)
 	if u.file != nil {
-		line, _ := json.Marshal(UsageEvent{TS: now, Action: action, Source: source, Workspace: workspace})
+		line, _ := json.Marshal(UsageEvent{TS: now, Action: action, Source: source, Agent: agent, Workspace: workspace})
 		line = append(line, '\n')
 		_, _ = u.file.Write(line) // OS-buffered; syncLoop fsyncs periodically
 	}

@@ -2,18 +2,23 @@ export type VectorizerConfig = {
   baseUrl: string;
   apiKey: string;
   workspaceId?: string;
+  agentName?: string;
 };
 
 export function parseConfig(): VectorizerConfig {
   const baseUrl = (process.env.VECTORIZER_URL ?? process.env.VECTORIZER_BASE_URL ?? "http://localhost:8091").replace(/\/$/, "");
   const apiKey = process.env.VECTORIZER_API_KEY ?? process.env.DEFAULT_API_KEY ?? "";
   const workspaceId = process.env.VECTORIZER_WORKSPACE_ID ?? process.env.WORKSPACE_ID;
-  return { baseUrl, apiKey, workspaceId };
+  // Who is calling through this bridge (e.g. maisarah, mirza, balqis).
+  // Surfaced in the dashboard as "Daily Usage By Agent" via X-Agent.
+  const agentName = process.env.VECTORIZER_AGENT_NAME ?? process.env.AGENT_NAME;
+  return { baseUrl, apiKey, workspaceId, agentName };
 }
 
 export function createClient(cfg: VectorizerConfig) {
   const headers: Record<string, string> = { "Content-Type": "application/json", "X-Source": "mcp" };
   if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
+  if (cfg.agentName) headers["X-Agent"] = cfg.agentName;
   async function req(path: string, init?: RequestInit) {
     const res = await fetch(`${cfg.baseUrl}${path}`, {
       ...init,
