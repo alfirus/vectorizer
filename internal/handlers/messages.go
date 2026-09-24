@@ -36,13 +36,19 @@ func NewMessagesHandler(store *store.Store) *MessagesHandler {
 }
 func (h *MessagesHandler) SetDeriver(d interface {
 	Enqueue(string, string, string, string, string)
-}) { h.deriver = d }
+}) {
+	h.deriver = d
+}
 func (h *MessagesHandler) SetWriteback(w interface {
 	Enqueue(string, string, string, string, string, time.Time)
-}) { h.writeback = w }
+}) {
+	h.writeback = w
+}
 func (h *MessagesHandler) SetWebhooks(w interface {
 	Fire(string, string, interface{})
-}) { h.webhooks = w }
+}) {
+	h.webhooks = w
+}
 
 // AddMessage stores a new message with embedding.
 func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
@@ -282,6 +288,9 @@ func (h *MessagesHandler) SearchMessages(c *fiber.Ctx) error {
 		fmt.Printf("Error searching: %v\n", err2)
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"})
 	}
+	// Relevance floor: chat/brain already dropped sub-floor hits, search did
+	// not, so MCP callers saw authoritative-looking garbage unfiltered.
+	results = floorResults(results)
 	return c.JSON(fiber.Map{"results": results, "count": len(results)})
 }
 
@@ -316,7 +325,22 @@ func (h *MessagesHandler) SearchMessagesSimple(c *fiber.Ctx) error {
 		fmt.Printf("Error searching: %v\n", err3)
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to search messages"})
 	}
+	results2 = floorResults(results2)
 	return c.JSON(fiber.Map{"results": results2, "count": len(results2)})
+}
+
+// floorResults drops hits below the shared relevance floor (RAG_MIN_SCORE,
+// default 0.22). chat.go and brain.go already applied it; the search handlers
+// did not, so MCP callers received below-floor noise as top results (Defect 2).
+func floorResults(in []models.SearchResult) []models.SearchResult {
+	floor := minRelevantScore()
+	out := make([]models.SearchResult, 0, len(in))
+	for _, r := range in {
+		if r.Score >= floor {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (h *MessagesHandler) ListMessages(c *fiber.Ctx) error {
@@ -428,6 +452,8 @@ func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 
 	// Sort by score and deduplicate
 	sort.Slice(allResults, func(i, j int) bool { return allResults[i].Score > allResults[j].Score })
+	// Same relevance floor as the single-workspace handlers (Defect 2).
+	allResults = floorResults(allResults)
 	seen := make(map[string]bool)
 	deduped := make([]models.SearchResult, 0, len(allResults))
 	for _, r := range allResults {

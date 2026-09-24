@@ -13,22 +13,26 @@ func fnvHash(s string) uint64 {
 	return h.Sum64()
 }
 
-func reasoningCollection(ws string) string { return fmt.Sprintf("ws_%s_reasoning", ResolveWorkspaceID(ws)) }
+func reasoningCollection(ws string) string {
+	return fmt.Sprintf("ws_%s_reasoning", ResolveWorkspaceID(ws))
+}
 
 // Premise edge: conclusion depends on message_ids / other conclusion_ids
 type ReasoningEdge struct {
-	ID              string   `json:"id"`
-	WorkspaceID     string   `json:"workspace_id"`
-	PeerID          string   `json:"peer_id"`
-	ConclusionID    string   `json:"conclusion_id"`
-	PremiseIDs      []string `json:"premise_ids"`
+	ID               string   `json:"id"`
+	WorkspaceID      string   `json:"workspace_id"`
+	PeerID           string   `json:"peer_id"`
+	ConclusionID     string   `json:"conclusion_id"`
+	PremiseIDs       []string `json:"premise_ids"`
 	SupportingMsgIDs []string `json:"supporting_message_ids"`
-	CreatedAt       string   `json:"created_at"`
+	CreatedAt        string   `json:"created_at"`
 }
 
 func (s *Store) AddReasoningEdge(ws, peerID, conclusionID string, premiseIDs, msgIDs []string) error {
 	coll, err := s.chroma.EnsureCollection(reasoningCollection(ws), map[string]interface{}{"workspace_id": ws})
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	id := fmt.Sprintf("edge_%d", time.Now().UnixNano())
 	meta := map[string]interface{}{
 		"workspace_id": ws, "peer_id": peerID, "conclusion_id": conclusionID,
@@ -42,24 +46,27 @@ func (s *Store) AddReasoningEdge(ws, peerID, conclusionID string, premiseIDs, ms
 
 func (s *Store) GetReasoningChain(ws, conclusionID string) ([]map[string]interface{}, error) {
 	coll, err := s.chroma.GetCollection(reasoningCollection(ws))
-	if err != nil { return nil, nil }
+	if err != nil {
+		return nil, nil
+	}
 	docs, _ := s.chroma.GetDocuments(coll.ID, map[string]interface{}{"conclusion_id": conclusionID}, 10, 0)
 	// BFS expand premises
 	seen := map[string]bool{conclusionID: true}
 	queue := []string{conclusionID}
 	var chain []map[string]interface{}
 	for len(queue) > 0 {
-		cur := queue[0]; queue = queue[1:]
+		cur := queue[0]
+		queue = queue[1:]
 		edges, _ := s.chroma.GetDocuments(coll.ID, map[string]interface{}{"conclusion_id": cur}, 10, 0)
 		for _, e := range edges {
 			chain = append(chain, e)
-			m,_:= e["metadata"].(map[string]interface{})
-			premStr,_:= m["premise_ids"].(string)
+			m, _ := e["metadata"].(map[string]interface{})
+			premStr, _ := m["premise_ids"].(string)
 			for _, pid := range strings.Split(premStr, ",") {
 				pid = strings.TrimSpace(pid)
-				if pid!="" && !seen[pid] {
-					seen[pid]=true
-					queue=append(queue, pid)
+				if pid != "" && !seen[pid] {
+					seen[pid] = true
+					queue = append(queue, pid)
 				}
 			}
 		}
@@ -82,6 +89,7 @@ func (s *Store) AddCodeEdge(ws, conclusionID string, premiseIDs, msgIDs []string
 	meta := map[string]interface{}{
 		"workspace_id": ws, "peer_id": "codeindex", "conclusion_id": conclusionID,
 		"premise_ids": strings.Join(premiseIDs, ","), "supporting_message_ids": strings.Join(msgIDs, ","),
+		"chunk_type": "edge", // never surfaced as content (Defect 3)
 		"created_at": time.Now().UTC().Format(time.RFC3339),
 	}
 	dummy := s.dummyVector()
@@ -95,7 +103,11 @@ func (s *Store) CodeCallers(ws, symbol string) ([]string, error) {
 	if err != nil {
 		return nil, nil
 	}
-	edges, _ := s.chroma.GetDocuments(coll.ID, map[string]interface{}{"conclusion_id": "calls:" + symbol}, 50, 0)
+	// calledby:<X> -> defines:<caller> is the reader's orientation. The old
+	// query read conclusion_id "calls:"+symbol, which stored CALLER as the
+	// conclusion and therefore returned the symbol's CALLEES mislabelled as
+	// callers (Defect 1). Write side emits both orientations.
+	edges, _ := s.chroma.GetDocuments(coll.ID, map[string]interface{}{"conclusion_id": "calledby:" + symbol}, 50, 0)
 	var callers []string
 	for _, e := range edges {
 		m, _ := e["metadata"].(map[string]interface{})
@@ -120,15 +132,28 @@ func (s *Store) CodeCallers(ws, symbol string) ([]string, error) {
 }
 
 func (s *Store) GetObservationContext(ws, sessionID string, chunkID string, window int) ([]map[string]interface{}, error) {
-	if window<=0 { window=2 }
+	if window <= 0 {
+		window = 2
+	}
 	// Find target chunk's index
 	all, _ := s.GetMessages(ws, sessionID, 1000, 0)
 	var idx = -1
 	for i, d := range all {
-		if fmt.Sprint(d["id"]) == chunkID { idx=i; break }
+		if fmt.Sprint(d["id"]) == chunkID {
+			idx = i
+			break
+		}
 	}
-	if idx==-1 { return nil, fmt.Errorf("chunk not found") }
-	start := idx - window; if start<0 { start=0 }
-	end := idx + window + 1; if end>len(all) { end=len(all) }
+	if idx == -1 {
+		return nil, fmt.Errorf("chunk not found")
+	}
+	start := idx - window
+	if start < 0 {
+		start = 0
+	}
+	end := idx + window + 1
+	if end > len(all) {
+		end = len(all)
+	}
 	return all[start:end], nil
 }

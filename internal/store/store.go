@@ -122,12 +122,12 @@ const maxChunkSize = 6000 // chars per chunk — vault uses 3600-3800 to avoid d
 
 // Store manages workspace isolation, session/message storage, and semantic search.
 type Store struct {
-	chroma     *chromadb.Client
-	embed      embedding.Embedder
-	brain      *llmbrain.Service
-	graph      *Graph
-	tenant     string
-	database   string
+	chroma   *chromadb.Client
+	embed    embedding.Embedder
+	brain    *llmbrain.Service
+	graph    *Graph
+	tenant   string
+	database string
 }
 
 func New(chromaClient *chromadb.Client, embedService embedding.Embedder) *Store {
@@ -348,27 +348,35 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 
 	// Chunk the content if too large
 	chunks := chunkText(content, maxChunkSize)
-	
+
 	ids := make([]string, len(chunks))
 	documents := make([]string, len(chunks))
 	metadatas := make([]map[string]interface{}, len(chunks))
-	
+
 	for i, chunk := range chunks {
 		id := fmt.Sprintf("%s_chunk_%d", msg.ID, i)
 		ids[i] = id
 		documents[i] = chunk
-			meta := map[string]interface{}{
+		meta := map[string]interface{}{
 			"message_id": msg.ID, "session_id": msg.SessionID, "workspace_id": msg.WorkspaceID,
 			"role": msg.Role, "created_at": msg.CreatedAt.Format(time.RFC3339),
 			"chunk_index": i, "total_chunks": len(chunks),
 			"content_hash": contentHash(msg.WorkspaceID, msg.SessionID, content),
 		}
-		if v, ok := msg.Metadata["scope"].(string); ok && v != "" { meta["scope"] = v }
-		if v, ok := msg.Metadata["peer_id"].(string); ok && v != "" { meta["peer_id"] = v }
-		if v, ok := msg.Metadata["peer_ids"]; ok { meta["peer_ids"] = v }
+		if v, ok := msg.Metadata["scope"].(string); ok && v != "" {
+			meta["scope"] = v
+		}
+		if v, ok := msg.Metadata["peer_id"].(string); ok && v != "" {
+			meta["peer_id"] = v
+		}
+		if v, ok := msg.Metadata["peer_ids"]; ok {
+			meta["peer_ids"] = v
+		}
 		// Vault 11-field flat metadata — passthrough any vault_*/known keys from client (source_path etc.)
 		for _, k := range []string{"source_type", "source_path", "header_path", "chunk_type", "tags", "importance", "agent", "language", "parent_doc_id", "doc_title", "chunk_id", "file_hash", "entities", "summary_1line"} {
-			if v, ok := msg.Metadata[k]; ok && v != "" && v != nil { meta[k] = v }
+			if v, ok := msg.Metadata[k]; ok && v != "" && v != nil {
+				meta[k] = v
+			}
 		}
 		// Vault librarian auto-tag: if client didn't send tags/header_path already filled, ask Brain (only for file/memory sources)
 		// Tagged asynchronously so ingest never blocks on LLM — tags fill via background update
@@ -417,15 +425,64 @@ func (s *Store) AddMessage(msg *models.Message, content string) error {
 func rrfFusion(vector, bm25 []models.SearchResult, k int) []models.SearchResult {
 	rank := map[string]float64{}
 	docs := map[string]models.SearchResult{}
-	for i, r := range vector { rank[r.ID] += 1.0 / float64(60+i); docs[r.ID] = r }
-	for i, r := range bm25 { rank[r.ID] += 1.0 / float64(60+i); if _, ok := docs[r.ID]; !ok { docs[r.ID] = r } }
-	type scored struct { id string; s float64 }
+	for i, r := range vector {
+		rank[r.ID] += 1.0 / float64(60+i)
+		docs[r.ID] = r
+	}
+	for i, r := range bm25 {
+		rank[r.ID] += 1.0 / float64(60+i)
+		if _, ok := docs[r.ID]; !ok {
+			docs[r.ID] = r
+		}
+	}
+	type scored struct {
+		id string
+		s  float64
+	}
 	var ss []scored
-	for id, s := range rank { ss = append(ss, scored{id, s}) }
-	sort.Slice(ss, func(i,j int) bool { return ss[i].s > ss[j].s })
+	for id, s := range rank {
+		ss = append(ss, scored{id, s})
+	}
+	sort.Slice(ss, func(i, j int) bool { return ss[i].s > ss[j].s })
+	// Normalised fused score: rank 0 in BOTH lists = 1.0, rank 0 in one list
+	// = 0.5. Callers previously overwrote Score with 1-Distance, which mixed
+	// cosine distance with the BM25 placeholder (1/term-count) — two
+	// incommensurable scales reported as one number (Defect 5).
+	const maxRRF = 2.0 / 60.0
 	var out []models.SearchResult
-	for _, sc := range ss { out = append(out, docs[sc.id]); if len(out) >= k { break } }
+	for _, sc := range ss {
+		d := docs[sc.id]
+		n := sc.s / maxRRF
+		if n > 1 {
+			n = 1
+		}
+		if n < 0 {
+			n = 0
+		}
+		d.Score = n
+		d.Distance = float32(1 - n)
+		d.Source = "hybrid"
+		out = append(out, d)
+		if len(out) >= k {
+			break
+		}
+	}
 	return out
+}
+
+// isEdgeDoc reports whether a stored doc is a reasoning/code-graph edge rather
+// than content. Edges share the workspace collection and carry a zero vector,
+// so without this they surfaced in search as null-score junk rows (Defect 3).
+func isEdgeDoc(id string, meta map[string]interface{}) bool {
+	if strings.HasPrefix(id, "codeedge_") || strings.HasPrefix(id, "edge_") {
+		return true
+	}
+	if meta != nil {
+		if ct, _ := meta["chunk_type"].(string); ct == "edge" {
+			return true
+		}
+	}
+	return false
 }
 
 // Search performs semantic search across messages.
@@ -469,7 +526,7 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 	}
 
 	var results []models.SearchResult
-	
+
 	// Search all workspaces if no workspace filter, otherwise search specific one.
 	// Shared identity scope: a scoped search (e.g. workspace "elizabeth") ALSO
 	// pulls from the "_global" workspace collection, so facts every peer needs
@@ -527,6 +584,11 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 		}
 
 		for _, qr := range queryResults {
+			// Graph edges share this collection with a zero vector; never
+			// return them as content (Defect 3).
+			if isEdgeDoc(qr.ID, qr.Metadata) {
+				continue
+			}
 			results = append(results, models.SearchResult{
 				ID:       qr.ID,
 				Document: qr.Document,
@@ -540,8 +602,16 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 	sort.Slice(results, func(i, j int) bool { return results[i].Distance < results[j].Distance })
 	seen := make(map[string]struct{}, len(results))
 	deduped := results[:0]
-	for _, r := range results { if _, ok := seen[r.ID]; ok { continue }; seen[r.ID]=struct{}{}; deduped=append(deduped, r) }
-	if len(deduped) > nResults { deduped = deduped[:nResults] }
+	for _, r := range results {
+		if _, ok := seen[r.ID]; ok {
+			continue
+		}
+		seen[r.ID] = struct{}{}
+		deduped = append(deduped, r)
+	}
+	if len(deduped) > nResults {
+		deduped = deduped[:nResults]
+	}
 
 	// Time-decay: memories older than 7 days get exponentially penalized
 	// Recent context matters more — matches aict.my pattern
@@ -569,7 +639,9 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 			// fetch neighbor chunks via GetMessages by chunk_id filter is expensive;
 			// instead fetch by scanning workspace docs with metadata match (cheap at 1200 docs)
 			existing := make(map[string]bool, len(deduped))
-			for _, r := range deduped { existing[r.ID] = true }
+			for _, r := range deduped {
+				existing[r.ID] = true
+			}
 			for _, nid := range neighbors {
 				if existing[nid] {
 					continue
@@ -642,29 +714,49 @@ func hybridScanWindow(nResults int) int {
 }
 func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string, scope string, peerID string, nResults int) ([]models.SearchResult, error) {
 	vec, err := s.SearchWithScope(query, workspaceID, sessionID, role, scope, peerID, nResults*2)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	// Build BM25 candidates by scanning workspace docs.
 	// Window: substring counting is cheap (no embedding), so scan wide enough
 	// to cover large workspaces. A narrow head-window (e.g. nResults*4 by
 	// insertion order) silently degrades to semantic-only on 10k+ doc
 	// workspaces whenever keywords live outside the oldest chunks.
 	wid := workspaceID
-	if wid == "" { if len(vec)>0 { if v,ok:=vec[0].Metadata["workspace_id"].(string); ok { wid=v } } }
+	if wid == "" {
+		if len(vec) > 0 {
+			if v, ok := vec[0].Metadata["workspace_id"].(string); ok {
+				wid = v
+			}
+		}
+	}
 	var bm25 []models.SearchResult
 	if wid != "" {
-		if docs, err2 := s.GetMessages(wid, sessionID, hybridScanWindow(nResults), 0); err2==nil {
+		if docs, err2 := s.GetMessages(wid, sessionID, hybridScanWindow(nResults), 0); err2 == nil {
 			for _, d := range docs {
 				doc, _ := d["document"].(string)
 				meta, _ := d["metadata"].(map[string]interface{})
-				if role!="" { if m,ok:=meta["role"].(string); ok && m!=role { continue } }
+				// Edges have no real text — skip in the BM25 leg too (Defect 3).
+				if isEdgeDoc(fmt.Sprint(d["id"]), meta) {
+					continue
+				}
+				if role != "" {
+					if m, ok := meta["role"].(string); ok && m != role {
+						continue
+					}
+				}
 				sc := bm25Score(query, doc)
-				if sc>0 { bm25 = append(bm25, models.SearchResult{ID: fmt.Sprint(d["id"]), Document: doc, Metadata: meta, Distance: float32(1/sc)}) }
+				if sc > 0 {
+					bm25 = append(bm25, models.SearchResult{ID: fmt.Sprint(d["id"]), Document: doc, Metadata: meta, Distance: float32(1 / sc)})
+				}
 			}
-			sort.Slice(bm25, func(i,j int) bool { return bm25[i].Distance < bm25[j].Distance })
-			if len(bm25) > nResults { bm25=bm25[:nResults] }
+			sort.Slice(bm25, func(i, j int) bool { return bm25[i].Distance < bm25[j].Distance })
+			if len(bm25) > nResults {
+				bm25 = bm25[:nResults]
+			}
 		}
 	}
-	if len(bm25)==0 {
+	if len(bm25) == 0 {
 		for i := range vec {
 			vec[i].Score = math.Max(0, 1-float64(vec[i].Distance))
 			// Honest label: fusion was requested but no keyword hits in the
@@ -675,11 +767,14 @@ func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string
 		return applyTimeDecay(vec), nil
 	}
 	fused := rrfFusion(vec, bm25, nResults)
+	// Score/Distance/Source are set INSIDE rrfFusion now — do not recompute
+	// Score from a different scale here (Defect 5). Only decay adjusts
+	// Distance, so refresh Score once after it.
+	fused = applyTimeDecay(fused)
 	for i := range fused {
 		fused[i].Score = math.Max(0, 1-float64(fused[i].Distance))
-		fused[i].Source = "hybrid"
 	}
-	return applyTimeDecay(fused), nil
+	return fused, nil
 }
 
 // GetWorkspaceStats returns stats for a workspace.
@@ -699,7 +794,7 @@ func (s *Store) GetWorkspaceStats(workspaceID string) (map[string]interface{}, e
 	}
 
 	return map[string]interface{}{
-		"workspace_id": workspaceID,
+		"workspace_id":   workspaceID,
 		"document_count": count,
 	}, nil
 }
