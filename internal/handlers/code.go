@@ -253,11 +253,36 @@ func (h *CodeHandler) Symbols(c *fiber.Ctx) error {
 		Language string `json:"language"`
 		Symbols  string `json:"symbols"`
 	}
-	var out []sym
-	matched := 0
+	// Dedupe BEFORE offset/limit: AddMessage splits any file over 6000 chars
+	// into N chunk docs, each carrying source_type=file. Counting rows meant
+	// counting chunk copies — 001_init.up.sql listed 4x, total 637 for 355
+	// files, and offsets landed mid-file. Prefer the overview row, i.e. the
+	// one that actually carries symbol entities.
+	uniq := map[string]*sym{}
+	var order []string
 	for _, d := range docs {
 		meta, _ := d["metadata"].(map[string]interface{})
 		fp, _ := meta["source_path"].(string)
+		if fp == "" {
+			continue
+		}
+		ent, _ := meta["entities"].(string)
+		lang, _ := meta["language"].(string)
+		if cur, ok := uniq[fp]; ok {
+			if cur.Symbols == "" && ent != "" {
+				cur.Symbols = ent
+			}
+			if cur.Language == "" && lang != "" {
+				cur.Language = lang
+			}
+			continue
+		}
+		uniq[fp] = &sym{File: fp, Language: lang, Symbols: ent}
+		order = append(order, fp)
+	}
+	var out []sym
+	matched := 0
+	for _, fp := range order {
 		if fileFilter != "" && !strings.Contains(strings.ToLower(fp), fileFilter) {
 			continue
 		}
@@ -268,9 +293,7 @@ func (h *CodeHandler) Symbols(c *fiber.Ctx) error {
 		if len(out) >= limit {
 			continue
 		}
-		ent, _ := meta["entities"].(string)
-		lang, _ := meta["language"].(string)
-		out = append(out, sym{File: fp, Language: lang, Symbols: ent})
+		out = append(out, *uniq[fp])
 	}
 	return c.JSON(fiber.Map{
 		"workspace_id": ws, "count": len(out), "total": matched,
