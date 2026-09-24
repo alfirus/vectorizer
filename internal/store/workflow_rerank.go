@@ -149,3 +149,82 @@ func bm25Score(query, doc string) float64 {
 	}
 	return s
 }
+
+// bm25Rank computes standard BM25 scores over a corpus of docs.
+// Returns one score per doc in the same order as input.
+// Formula: idf * (tf*(k1+1)) / (tf + k1*(1-b+b*len/avgLen)), k1=1.2, b=0.75.
+func bm25Rank(query string, docs []string) []float64 {
+	if len(docs) == 0 {
+		return nil
+	}
+
+	k1 := 1.2
+	b := 0.75
+
+	// query tokens: LexTokens, drop len<2, dedupe
+	qtRaw := LexTokens(strings.ToLower(query))
+	tokenSet := make(map[string]bool)
+	for _, t := range qtRaw {
+		if len(t) >= 2 && !tokenSet[t] {
+			tokenSet[t] = true
+		}
+	}
+
+	N := len(docs)
+
+	// compute tf and df for each query token
+	tfMap := make([]map[string]int, N) // tfMap[i][token] = count in doc i
+	df := make(map[string]int)         // df[token] = number of docs with tf>0
+
+	for i, d := range docs {
+		dLower := strings.ToLower(d)
+		tfMap[i] = make(map[string]int)
+		for tok := range tokenSet {
+			c := strings.Count(dLower, tok)
+			if c > 0 {
+				tfMap[i][tok] = c
+				df[tok]++
+			}
+		}
+	}
+
+	// avgLen: whitespace-token count of each doc, then mean
+	docLens := make([]int, N)
+	totalLen := 0
+	for i, d := range docs {
+		l := len(strings.Fields(strings.ToLower(d)))
+		docLens[i] = l
+		totalLen += l
+	}
+	avgLen := float64(totalLen) / float64(N)
+
+	// compute scores
+	// Guard the divide-by-zero WITHOUT mutating avgLen. The previous form
+	// (`if docLens[i] == 0 || avgLen == 0 { avgLen = 1 }`) reassigned the
+	// corpus-wide mean from inside the per-doc loop: one EMPTY doc set
+	// avgLen to 1, after which every later doc computed docNorm = len/1,
+	// its BM25 denominator ballooned, and a single blank row reordered the
+	// whole ranking. The guard belongs in a local. (Empty docs have tf 0
+	// and are skipped below anyway, so their docNorm never contributes.)
+	effectiveAvg := avgLen
+	if effectiveAvg == 0 {
+		effectiveAvg = 1
+	}
+	scores := make([]float64, N)
+	for i := 0; i < N; i++ {
+		docNorm := float64(docLens[i]) / effectiveAvg
+		for tok := range tokenSet {
+			tf := tfMap[i][tok]
+			if tf == 0 {
+				continue
+			}
+			dfVal := float64(df[tok])
+			idf := math.Log(1 + (float64(N)-dfVal+0.5)/float64(dfVal+0.5))
+			numerator := idf * (float64(tf) * (k1 + 1))
+			denominator := float64(tf) + k1*(1-b+b*docNorm)
+			scores[i] += numerator / denominator
+		}
+	}
+
+	return scores
+}
