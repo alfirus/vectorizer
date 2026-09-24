@@ -62,21 +62,41 @@ func (h *WorkspacesHandler) GetWorkspaceHealth(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to get workspace health"})
 	}
 
-	// Get embedding model info
+	// Embedding model info + REAL status. "healthy" used to be hardcoded here,
+	// which reported healthy even with the embedder dead — the exact blindness
+	// that let a 30-minute LM Studio outage pass unnoticed.
+	// GetEmbeddingInfo makes a live embed call, so only take that path when the
+	// background probe says the provider answers; otherwise we would block this
+	// handler for up to EMBED_TIMEOUT_SECS on an already-dead provider.
 	embeddingModel := "unknown"
 	embeddingDim := 0
-	if h.store != nil {
+	embed := store.EmbeddingHealth()
+	if h.store != nil && embed.Status == "ok" {
 		if info, err := h.store.GetEmbeddingInfo(); err == nil {
 			embeddingModel = info["model"].(string)
 			embeddingDim = info["dimension"].(int)
 		}
+	} else if embed.Status == "degraded" {
+		embeddingModel = store.EmbeddingModelName()
+	}
+
+	status := "healthy"
+	switch embed.Status {
+	case "degraded":
+		status = "degraded"
+	case "unknown":
+		// No probe result yet — do not assert healthy on no evidence.
+		status = "unknown"
 	}
 
 	return c.JSON(fiber.Map{
-		"workspace_id":    id,
-		"document_count":  stats["document_count"],
-		"embedding_model": embeddingModel,
-		"embedding_dim":   embeddingDim,
-		"status":          "healthy",
+		"workspace_id":      id,
+		"document_count":    stats["document_count"],
+		"embedding_model":   embeddingModel,
+		"embedding_dim":     embeddingDim,
+		"embedding":         embed.Status,
+		"embedding_error":   embed.LastErr,
+		"embedding_last_ok": embed.LastOK,
+		"status":            status,
 	})
 }
