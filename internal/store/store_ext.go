@@ -40,6 +40,36 @@ func (s *Store) GetMessages(workspaceID, sessionID string, limit, offset int) ([
 	return docs, nil
 }
 
+// bm25Where builds the server-side filter for the BM25 doc-scan leg of
+// HybridSearchWithScope: workspace (+ session when set, matching
+// GetMessages) plus a peer_id $ne codeindex clause so the scan window is
+// spent on content rows, not code-graph edges. chroma normalizeWhere wraps
+// the multi-key map in $and and passes the $ne value through untouched.
+func bm25Where(workspaceID, sessionID string) map[string]interface{} {
+	where := map[string]interface{}{"workspace_id": workspaceID}
+	if sessionID != "" {
+		where["session_id"] = sessionID
+	}
+	where["peer_id"] = map[string]interface{}{"$ne": "codeindex"}
+	return where
+}
+
+// getBM25Docs fetches candidate docs for the BM25 leg with edges excluded
+// server-side. Same collection lookup as GetMessages; limit applies to
+// MATCHING rows, so a generous window costs only content rows back.
+func (s *Store) getBM25Docs(workspaceID, sessionID string, limit int) ([]map[string]interface{}, error) {
+	collName := s.GetCollectionName(workspaceID)
+	coll, err := s.chroma.GetCollection(collName)
+	if err != nil {
+		return []map[string]interface{}{}, nil
+	}
+	docs, err := s.chroma.GetDocuments(coll.ID, bm25Where(workspaceID, sessionID), limit, 0)
+	if err != nil {
+		return nil, fmt.Errorf("get bm25 docs: %w", err)
+	}
+	return docs, nil
+}
+
 // DeleteMessage removes every chunk carrying message_id (all chunk_N parts).
 // Returns the number of chunks deleted. Wrong facts must be forgettable —
 // without this, a confabulated auto-stored conclusion is immortal.

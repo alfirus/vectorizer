@@ -699,10 +699,12 @@ func (s *Store) HybridSearch(query, workspaceID, sessionID, role string, nResult
 	return s.HybridSearchWithScope(query, workspaceID, sessionID, role, "", "", nResults)
 }
 
-// hybridScanLimit caps the BM25 doc-scan window: wide enough to cover large
-// workspaces (12k+ docs), small enough to stay cheap — substring counting,
-// no embedding calls.
-const hybridScanLimit = 400
+// hybridScanLimit caps the BM25 doc-scan window: wide enough to cover every
+// current content set (code_aict 637, ags 985, vectorizer 177, pilotv4 170,
+// dashboard 41) with room — substring counting, no embedding calls.
+// Edges are excluded server-side (getBM25Docs), so the window is spent on
+// content rows only.
+const hybridScanLimit = 4000
 
 // hybridScanWindow scales the scan with the request but never below the floor
 // that keeps keyword recall alive on big workspaces.
@@ -732,7 +734,21 @@ func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string
 	}
 	var bm25 []models.SearchResult
 	if wid != "" {
-		if docs, err2 := s.GetMessages(wid, sessionID, hybridScanWindow(nResults), 0); err2 == nil {
+		if docs, err2 := s.getBM25Docs(wid, sessionID, hybridScanWindow(nResults)); err2 == nil {
+			// Collect candidates first, then score them as one corpus.
+			// bm25Rank needs IDF (how many docs contain each query token) and
+			// average document length, neither of which exists when scoring a
+			// single doc in isolation — the old per-doc bm25Score was raw term
+			// frequency with no IDF and no length normalization (Defect C), so
+			// boilerplate outranked rare identifiers and a nonsense query still
+			// produced a convincing top score.
+			type bm25Cand struct {
+				id   string
+				doc  string
+				meta map[string]interface{}
+			}
+			var cands []bm25Cand
+			var texts []string
 			for _, d := range docs {
 				doc, _ := d["document"].(string)
 				meta, _ := d["metadata"].(map[string]interface{})
@@ -745,9 +761,14 @@ func (s *Store) HybridSearchWithScope(query, workspaceID, sessionID, role string
 						continue
 					}
 				}
-				sc := bm25Score(query, doc)
+				cands = append(cands, bm25Cand{id: fmt.Sprint(d["id"]), doc: doc, meta: meta})
+				texts = append(texts, doc)
+			}
+			for i, sc := range bm25Rank(query, texts) {
 				if sc > 0 {
-					bm25 = append(bm25, models.SearchResult{ID: fmt.Sprint(d["id"]), Document: doc, Metadata: meta, Distance: float32(1 / sc)})
+					// Distance stays the ordering key for the sort below;
+					// rrfFusion consumes rank position, not this value (Defect 5).
+					bm25 = append(bm25, models.SearchResult{ID: cands[i].id, Document: cands[i].doc, Metadata: cands[i].meta, Distance: float32(1 / sc)})
 				}
 			}
 			sort.Slice(bm25, func(i, j int) bool { return bm25[i].Distance < bm25[j].Distance })
