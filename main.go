@@ -83,6 +83,14 @@ func main() {
 	// Initialize store
 	vecStore := store.New(chromaClient, embedService)
 
+	// Background embedding probe: /health reports the embedder from a cached
+	// result rather than calling it inline. The Docker healthcheck is
+	// wget || exit 1 with Timeout=5s, Retries=3 — a synchronous probe against a
+	// down LM Studio (EMBED_TIMEOUT_SECS=600) would blow that budget and get
+	// Vectorizer restarted by an outage that is not its fault.
+	stopEmbedProbe := store.StartEmbeddingProbe(embedService)
+	defer stopEmbedProbe()
+
 	// Initialize LLM brain (optional)
 	var brain *llmbrain.Service
 	if cfg.LLMEnabled {
@@ -261,19 +269,23 @@ func main() {
 	// Routes
 	api := app.Group("/api/v1")
 
-	// Health check (no auth required) - includes ChromaDB
+	// Health check (no auth required) - includes ChromaDB + embedding provider.
+	// Embedding status is READ from the background probe cache (store.EmbeddingHealth),
+	// never probed inline — see the stopEmbedProbe comment above for why.
 	api.Get("/health", func(c *fiber.Ctx) error {
 		chromaStatus := "ok"
 		if err := chromaClient.Heartbeat(); err != nil {
 			chromaStatus = "unavailable"
 		}
+		embed := store.EmbeddingHealth()
 		status := "ok"
-		if chromaStatus != "ok" {
+		if chromaStatus != "ok" || embed.Status == "degraded" {
 			status = "degraded"
 		}
 		return c.JSON(fiber.Map{
 			"status": status, "name": "vectorizer", "version": "0.3.0",
 			"llm_enabled": cfg.LLMEnabled, "chromadb": chromaStatus, "embedding_model": cfg.EmbedModel,
+			"embedding": embed.Status, "embedding_error": embed.LastErr, "embedding_last_ok": embed.LastOK,
 		})
 	})
 	api.Get("/metrics", func(c *fiber.Ctx) error {

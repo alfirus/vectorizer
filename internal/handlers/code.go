@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -223,6 +224,23 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 			res.Edges++
 		}
 	}
+	// IndexResult.Errors was only ever returned in the response body. The
+	// code_aict reindex ran 2h4m and the MCP client died before reading it, so
+	// every failed file below was silently discarded. Log it server-side so an
+	// interrupted run still shows what was skipped — that gap is exactly why
+	// an embedder outage during indexing would have gone unreported.
+	if n := len(res.Errors); n > 0 {
+		log.Printf("code/index %s: completed with %d error(s):", ws, n)
+		for i, e := range res.Errors {
+			if i >= 20 {
+				log.Printf("code/index %s:   ... %d more", ws, n-20)
+				break
+			}
+			log.Printf("code/index %s:   %s", ws, e)
+		}
+	}
+	log.Printf("code/index %s: done files=%d skipped=%d too_large=%d unsupported=%d edges=%d errors=%d",
+		ws, res.Files, res.Skipped, res.SkippedTooLarge, res.SkippedUnsupported, res.Edges, len(res.Errors))
 	return c.JSON(res)
 }
 
