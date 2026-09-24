@@ -40,6 +40,15 @@ var langByExt = map[string]string{
 	".ts": "ts", ".tsx": "ts", ".js": "ts", ".jsx": "ts",
 }
 
+// textLangByExt marks files indexed as WHOLE TEXT only — no symbol
+// extraction, no CALLS edges. Without these, deploy/*.yml, migrations/*.sql,
+// README/AGENTS.md, CI workflows and shell scripts were skipped outright at
+// the walk gate, so infra + schema questions were unanswerable (Defect 4).
+var textLangByExt = map[string]string{
+	".sql": "sql", ".yml": "yaml", ".yaml": "yaml",
+	".md": "markdown", ".sh": "shell", ".json": "json",
+}
+
 var (
 	goFuncRe   = regexp.MustCompile(`^func\s+(?:\([^)]*\)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 	goTypeRe   = regexp.MustCompile(`^type\s+([A-Za-z_][A-Za-z0-9_]*)\s+(?:struct|interface|\(|=)`)
@@ -54,8 +63,14 @@ var (
 )
 
 // LanguageFor returns the indexed language for a path, or "" to skip.
+// Symbol languages (go/python/ts) come first; config/doc/script extensions
+// fall back to whole-text indexing instead of being dropped (Defect 4).
 func LanguageFor(path string) string {
-	return langByExt[strings.ToLower(filepath.Ext(path))]
+	ext := strings.ToLower(filepath.Ext(path))
+	if l := langByExt[ext]; l != "" {
+		return l
+	}
+	return textLangByExt[ext]
 }
 
 // ParseFile extracts imports + top-level symbols. Body capture is
@@ -150,8 +165,8 @@ func ParseFile(path, src string) FileSymbols {
 		end := bodyEnd(lines, i, lang)
 		fs.Symbols = append(fs.Symbols, Symbol{
 			Name: name, Kind: kind, Language: lang, Doc: doc,
-			Body:   strings.Join(lines[i:end], "\n"),
-			Start:  i, End: end,
+			Body:  strings.Join(lines[i:end], "\n"),
+			Start: i, End: end,
 		})
 		i = end - 1 // continue after body
 	}
@@ -240,6 +255,24 @@ func ChunkFile(path, src string, minChars int) []Chunk {
 		"parent_doc_id": path, "importance": "3",
 	}
 	var out []Chunk
+	// Whole-text files (yaml/sql/md/sh/json) carry no symbols: index the raw
+	// source in ~minChars pieces instead of an empty symbol overview, so
+	// deploy/, migrations/, AGENTS.md and CI config become searchable.
+	if len(fs.Symbols) == 0 {
+		if strings.TrimSpace(src) == "" {
+			return nil
+		}
+		for _, part := range splitText(src, minChars) {
+			m := map[string]string{}
+			for k, v := range base {
+				m[k] = v
+			}
+			m["chunk_type"] = "text"
+			m["entities"] = filepath.Base(path)
+			out = append(out, Chunk{Document: part, Metadata: m})
+		}
+		return out
+	}
 	ov := map[string]string{}
 	for k, v := range base {
 		ov[k] = v
@@ -281,6 +314,30 @@ func ChunkFile(path, src string, minChars int) []Chunk {
 	}
 	flush()
 	return out
+}
+
+// splitText breaks raw source into <=size pieces on line boundaries, so
+// config/schema/doc files stay retrievable without a symbol parser.
+// SplitAfter keeps each line's terminator, so concatenating the parts
+// reproduces src byte-for-byte (Split+"\n" invented a trailing newline).
+func splitText(src string, size int) []string {
+	if size <= 0 {
+		size = 2000
+	}
+	lines := strings.SplitAfter(src, "\n")
+	var parts []string
+	var buf strings.Builder
+	for _, ln := range lines {
+		if buf.Len() > 0 && buf.Len()+len(ln) > size {
+			parts = append(parts, buf.String())
+			buf.Reset()
+		}
+		buf.WriteString(ln)
+	}
+	if buf.Len() > 0 {
+		parts = append(parts, buf.String())
+	}
+	return parts
 }
 
 func symbolNames(syms []Symbol) string {

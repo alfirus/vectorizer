@@ -39,15 +39,20 @@ var codeSkipDirs = map[string]bool{
 
 const maxCodeFileBytes = 500 * 1024 // skip generated monsters
 
-// IndexResult is the per-file + aggregate report.
+// IndexResult is the per-file + aggregate report. Skip counters make refusals
+// visible: previously .yml/.sql files vanished with no trace in this output,
+// which is why nobody noticed the config gap (Defect 6).
 type IndexResult struct {
-	WorkspaceID string         `json:"workspace_id"`
-	Files       int            `json:"files_indexed"`
-	Skipped     int            `json:"files_skipped_unchanged"`
-	Symbols     int            `json:"symbols"`
-	Edges       int            `json:"edges"`
-	Errors      []string       `json:"errors,omitempty"`
-	Indexed     []string       `json:"indexed_files,omitempty"`
+	WorkspaceID        string   `json:"workspace_id"`
+	Files              int      `json:"files_indexed"`
+	Skipped            int      `json:"files_skipped_unchanged"`
+	SkippedUnsupported int      `json:"files_skipped_unsupported_ext"`
+	SkippedTooLarge    int      `json:"files_skipped_too_large"`
+	FilesSeen          int      `json:"files_seen"`
+	Symbols            int      `json:"symbols"`
+	Edges              int      `json:"edges"`
+	Errors             []string `json:"errors,omitempty"`
+	Indexed            []string `json:"indexed_files,omitempty"`
 }
 
 // Index walks path and indexes code files into workspace_id
@@ -120,7 +125,9 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 			}
 			return nil
 		}
+		res.FilesSeen++
 		if codeindex.LanguageFor(p) == "" {
+			res.SkippedUnsupported++
 			return nil
 		}
 		if gitignore[filepath.Base(p)] {
@@ -128,6 +135,7 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 		}
 		st, err := d.Info()
 		if err != nil || st.Size() > maxCodeFileBytes {
+			res.SkippedTooLarge++
 			return nil
 		}
 		b, err := os.ReadFile(p)
@@ -181,14 +189,26 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 	}
 
 	// Phase D: graph edges (file DEFINES symbol via entities; CALLS via CallEdges).
+	// Built from ALL walked files, not just hash-changed ones: Phase B skips
+	// unchanged files into `todo`, so deriving edges from `todo` alone wrote
+	// zero edges on any re-index — leaving callers broken after a deploy.
+	// Edge IDs are deterministic, so re-writing every run is a no-op upsert.
 	var parsed []codeindex.FileSymbols
-	for _, j := range todo {
+	for _, j := range jobs {
 		parsed = append(parsed, j.fs)
 	}
 	for _, e := range codeindex.CallEdges(parsed) {
 		if err := h.store.AddCodeEdge(ws, "calls:"+e.Caller,
 			[]string{"defines:" + e.Callee}, []string{"file:" + e.File}); err != nil {
 			res.Errors = append(res.Errors, "edge "+e.Caller+"->"+e.Callee+": "+err.Error())
+			continue
+		}
+		res.Edges++
+		// Reverse orientation, so "who calls X" can be answered directly
+		// (Defect 1): calledby:<callee> -> defines:<caller>.
+		if err := h.store.AddCodeEdge(ws, "calledby:"+e.Callee,
+			[]string{"defines:" + e.Caller}, []string{"file:" + e.File}); err != nil {
+			res.Errors = append(res.Errors, "edge "+e.Callee+"<-"+e.Caller+": "+err.Error())
 			continue
 		}
 		res.Edges++
@@ -214,7 +234,17 @@ func (h *CodeHandler) Symbols(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id is required"})
 	}
 	fileFilter := strings.ToLower(c.Query("file"))
-	docs, err := h.store.QueryByMetadata(ws, map[string]interface{}{"source_type": "file"}, 500)
+	// offset+limit: a 200-item hard cap with no paging silently hid files on
+	// any repo with >200 source files, and `count` read like a true total.
+	offset := c.QueryInt("offset", 0)
+	limit := c.QueryInt("limit", 200)
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	docs, err := h.store.QueryByMetadata(ws, map[string]interface{}{"source_type": "file"}, 5000)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "query failed"})
 	}
@@ -224,20 +254,28 @@ func (h *CodeHandler) Symbols(c *fiber.Ctx) error {
 		Symbols  string `json:"symbols"`
 	}
 	var out []sym
+	matched := 0
 	for _, d := range docs {
 		meta, _ := d["metadata"].(map[string]interface{})
 		fp, _ := meta["source_path"].(string)
 		if fileFilter != "" && !strings.Contains(strings.ToLower(fp), fileFilter) {
 			continue
 		}
+		matched++
+		if matched <= offset {
+			continue
+		}
+		if len(out) >= limit {
+			continue
+		}
 		ent, _ := meta["entities"].(string)
 		lang, _ := meta["language"].(string)
 		out = append(out, sym{File: fp, Language: lang, Symbols: ent})
-		if len(out) >= 200 {
-			break
-		}
 	}
-	return c.JSON(fiber.Map{"workspace_id": ws, "count": len(out), "files": out})
+	return c.JSON(fiber.Map{
+		"workspace_id": ws, "count": len(out), "total": matched,
+		"offset": offset, "limit": limit, "files": out,
+	})
 }
 
 // Callers answers "what calls X" via CALLS reasoning edges.
@@ -285,6 +323,13 @@ func symbolNameList(fs codeindex.FileSymbols) []string {
 func chunkTitle(ch codeindex.Chunk) string {
 	if ch.Metadata["chunk_type"] == "file_overview" {
 		return "Overview"
+	}
+	// Whole-text files (yaml/sql/md/sh/json) have no symbol entities.
+	if ch.Metadata["chunk_type"] == "text" {
+		if e := ch.Metadata["entities"]; e != "" {
+			return e
+		}
+		return "Content"
 	}
 	if e := ch.Metadata["entities"]; e != "" {
 		parts := strings.Split(e, ",")
