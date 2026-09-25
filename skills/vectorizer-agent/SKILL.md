@@ -26,7 +26,19 @@ Give every agent a personal semantic-memory skill backed by its own Vectorizer w
    ```
 
    On Hermes, `<skills-root>/<agent>/skills/note-taking/vectorizer/SKILL.md` is where the agent's skill loader finds it (the `note-taking` category exists on every profile).
-3. **Verify:** the skill file exists, the workspace is listed, and a store→search round-trip works with `X-Agent: <name>`:
+3. **MCP bridge:** wire the shared MCP bridge into the agent's Hermes config so `vectorizer_*` tools load in every session:
+
+   ```
+   hermes -p <agent> config set mcp_servers.vectorizer.url http://100.90.123.105:8093/mcp
+   hermes -p <agent> config set mcp_servers.vectorizer.headers.Authorization "Bearer <MCP_BEARER_TOKEN>"
+   hermes -p <agent> config set mcp_servers.vectorizer.headers.X-Agent <agent>
+   hermes -p <agent> config set mcp_servers.vectorizer.timeout 180
+   hermes -p <agent> config set mcp_servers.vectorizer.connect_timeout 30
+   ```
+
+   `<MCP_BEARER_TOKEN>` is the bridge's token (`MCP_BEARER_TOKEN` in the `vectorizer-mcp` container env). The per-request `X-Agent` header is what keeps usage attributed per agent on a shared bridge — never set `VECTORIZER_AGENT_NAME` on the shared bridge itself. Tools register as `mcp_vectorizer_vectorizer_*`; verify with `hermes -p <agent> mcp test vectorizer` (expect 25 tools). MCP servers load at agent start — running agents pick this up on their next restart.
+
+4. **Verify:** the skill file exists, the workspace is listed, and a store→search round-trip works with `X-Agent: <name>`:
 
    ```
    curl -s -X POST http://100.90.123.105:8091/api/v1/messages \
