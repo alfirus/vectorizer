@@ -36,7 +36,7 @@ Give every agent a personal semantic-memory skill backed by its own Vectorizer w
    hermes -p <agent> config set mcp_servers.vectorizer.connect_timeout 30
    ```
 
-   `<MCP_BEARER_TOKEN>` is the bridge's token (`MCP_BEARER_TOKEN` in the `vectorizer-mcp` container env). The per-request `X-Agent` header is what keeps usage attributed per agent on a shared bridge — never set `VECTORIZER_AGENT_NAME` on the shared bridge itself. Tools register as `mcp_vectorizer_vectorizer_*`; verify with `hermes -p <agent> mcp test vectorizer` (expect 25 tools). MCP servers load at agent start — running agents pick this up on their next restart.
+   `<MCP_BEARER_TOKEN>` is the bridge's token (`MCP_BEARER_TOKEN` in the `vectorizer-mcp` container env). The per-request `X-Agent` header is what keeps usage attributed per agent on a shared bridge — never set `VECTORIZER_AGENT_NAME` on the shared bridge itself. Tools register as `mcp__vectorizer__vectorizer_*` (double underscores); verify with `hermes -p <agent> mcp test vectorizer` (expect 25 tools). MCP servers load at agent start — running agents pick this up on their next restart.
 
 4. **Verify:** the skill file exists, the workspace is listed, and a store→search round-trip works with `X-Agent: <name>`:
 
@@ -64,3 +64,4 @@ Every agent skill carries a `## Your workflow as <Role>` section — what that r
 - Workspace names are exact and case-sensitive downstream (`ws_<name>` collections) — always lowercase.
 - Never stamp a second workspace for the same agent (`<agent>2`, `<agent>_v2`) — re-use the one workspace; search recency and the reasoning graph live there.
 - The skill hardcodes the live endpoint and workspace — re-stamp it when either changes; don't hand-edit 18 copies.
+- Windows Hermes gateways can fail MCP HTTP discovery with `ModuleNotFoundError: No module named 'pywintypes'` even though `hermes mcp test` works (staged-venv `.pth` gap in `hermes-runtime.pth`). Fix is host-side; verify end-to-end with the log line `MCP server 'vectorizer' (HTTP): registered 25 tool(s)` after a gateway restart, not just `mcp test`.

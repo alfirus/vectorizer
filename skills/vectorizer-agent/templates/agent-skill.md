@@ -31,7 +31,7 @@ curl -s -X POST http://100.90.123.105:8091/api/v1/messages/search/all ... -d '{"
 
 Batch store: `POST /api/v1/messages/batch` `{"workspace_id":"{{workspace}}","messages":[...]}` (batches of ~10).
 
-Your profile is wired to the shared MCP bridge (`http://100.90.123.105:8093/mcp`, `X-Agent: {{agent_name}}` header). Prefer the MCP tools over raw curl where they're loaded — they register as `mcp_vectorizer_vectorizer_*` (e.g. `mcp_vectorizer_vectorizer_search`, `mcp_vectorizer_vectorizer_add_message`; 25 tools: messages, brain, provenance, code, peers, workspace) with the same semantics as the REST calls below. If you don't see them in this session (server changes need an agent restart), fall back to the REST calls below.
+Your profile is wired to the shared MCP bridge (`http://100.90.123.105:8093/mcp`, `X-Agent: {{agent_name}}` header). Prefer the MCP tools over raw curl where they're loaded — they register as `mcp__vectorizer__vectorizer_*` (e.g. `mcp__vectorizer__vectorizer_search`, `mcp__vectorizer__vectorizer_add_message`; 25 tools: messages, brain, provenance, code, peers, workspace) with the same semantics as the REST calls below. If you don't see them in this session (server changes need an agent restart), fall back to the REST calls below.
 
 ## Recall/record loop
 1. **Session start (recap or long task):** `GET /api/v1/conclusions/brief?workspace_id={{workspace}}` — stats + representation + recent + top entities in ONE call.
