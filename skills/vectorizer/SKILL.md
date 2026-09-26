@@ -50,8 +50,10 @@ After indexing (or on an already-indexed `code_<name>` workspace):
 - Chat answers only auto-persist as conclusions when the seed had a relevant hit.
 
 ## Rules
-- `workspace_id = agent identity` (e.g. `hermes`, `opencode`), isolation via `ws_<workspace_id>` collection.
-- Shared identity facts (family, user profile) go to workspace `_global` — visible to every scoped search.
+- `workspace_id = agent identity` — every agent has its OWN workspace named after it (`sofia`, `maisarah`, `shiela`, …), isolated via the `ws_<workspace_id>` collection. Never write into another agent's workspace.
+- `code_<project>` workspaces are PROGRAMMING PROJECT indexes (`code_vectorizer` = this repo). Prose memory never goes into `code_*`.
+- Shared identity facts (family, user profile) go to workspace `_global` — visible to every scoped search. `family` holds the indexed markdown vault.
+- Always send `X-Agent: <your name>` on every call (README "Agent Attribution") — the usage dashboard attributes activity by it.
 - Always set `session_id` (conversation/thread id). Same workspace, different session = separate history but searchable together.
 - Chunking 4000 chars is automatic — pass full content.
 - If no MCP: fallback to REST `POST /api/v1/messages`, `POST /api/v1/messages/search`, `GET /api/v1/messages?workspace_id=…` with `X-API-Key`.
