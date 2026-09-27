@@ -3,7 +3,7 @@ services:
     build: .
     container_name: vectorizer
     ports:
-      - "${PORT:-8091}:${PORT:-8091}"
+      - "127.0.0.1:${PORT:-8091}:${PORT:-8091}"
       - "${GRPC_PORT:-50051}:${GRPC_PORT:-50051}"
     env_file:
       - .env
@@ -74,7 +74,7 @@ services:
     image: chromadb/chroma:1.0.0
     container_name: vectorizer-chromadb
     ports:
-      - "${CHROMA_PORT:-8100}:8000"
+      - "127.0.0.1:${CHROMA_PORT:-8100}:8000"
     volumes:
       # Chroma 1.0.0 persists to /data per baked-in /config.yaml (persist_path)
       # — PERSIST_DIRECTORY env is ignored. Mount here or vectors live in the
@@ -95,7 +95,7 @@ services:
       - .env
     environment:
       VECTORIZER_URL: http://vectorizer:8091
-      VECTORIZER_API_KEY: ${VECTORIZER_API_KEY:-${DEFAULT_API_KEY:-vectorizer-local-key}}
+      VECTORIZER_API_KEY: ${VECTORIZER_API_KEY:-${DEFAULT_API_KEY:-}}
       CHROMA_URL: http://chromadb:8000
       LM_STUDIO_URL: ${LM_STUDIO_URL:-${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}}
       LM_STUDIO_KEY: ${LM_STUDIO_API_KEY:-${OAI_API_KEY:-}}

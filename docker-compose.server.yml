@@ -3,7 +3,7 @@ services:
     build: .
     container_name: vectorizer
     ports:
-      - "0.0.0.0:8091:8091"
+      - "127.0.0.1:8091:8091"
       - "127.0.0.1:50051:50051"
     env_file:
       - .env
@@ -81,7 +81,7 @@ services:
     environment:
       PORT: 8092
       VECTORIZER_URL: http://vectorizer:8091
-      VECTORIZER_API_KEY: dev-key
+      VECTORIZER_API_KEY: ${DEFAULT_API_KEY}
       CHROMA_URL: http://chromadb:8000
       LM_STUDIO_URL: http://100.121.188.113:1234/v1
       LM_STUDIO_KEY: ${LM_STUDIO_API_KEY}
