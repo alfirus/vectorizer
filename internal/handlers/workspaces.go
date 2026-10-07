@@ -80,6 +80,23 @@ func (h *WorkspacesHandler) GetWorkspaceHealth(c *fiber.Ctx) error {
 		embeddingModel = store.EmbeddingModelName()
 	}
 
+	// Readability assertion: document_count is the RAW collection count with
+	// no workspace filter, so a phantom id (sidecar listed as workspace)
+	// reports the sidecar rows while every filtered read returns 0 — the
+	// exact blindness behind t_5f0d1cb0 ("healthy + 17,016" with 0 readable
+	// rows). readable_rows counts what the read path actually matches
+	// (where workspace_id=<id>); rows present but nothing readable can
+	// never pass as healthy again.
+	readableRows := 0
+	if rc, rerr := h.store.CountReadableRows(id); rerr == nil {
+		readableRows = rc
+	}
+
+	docCount := 0
+	if dc, ok := stats["document_count"].(int); ok {
+		docCount = dc
+	}
+
 	status := "healthy"
 	switch embed.Status {
 	case "degraded":
@@ -88,10 +105,14 @@ func (h *WorkspacesHandler) GetWorkspaceHealth(c *fiber.Ctx) error {
 		// No probe result yet — do not assert healthy on no evidence.
 		status = "unknown"
 	}
+	if docCount > 0 && readableRows == 0 {
+		status = "degraded"
+	}
 
 	return c.JSON(fiber.Map{
 		"workspace_id":      id,
 		"document_count":    stats["document_count"],
+		"readable_rows":     readableRows,
 		"embedding_model":   embeddingModel,
 		"embedding_dim":     embeddingDim,
 		"embedding":         embed.Status,
