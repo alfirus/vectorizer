@@ -59,8 +59,20 @@ func EmbeddingModelName() string {
 // StartEmbeddingProbe probes the embedder every probeInterval in the goroutine
 // it spawns, seeding one result immediately. Returns a stop function.
 //
+// On recovery (a probe result that flips the cached status to ok) the
+// deferred-update drain hook fires once per transition, so entries queued
+// while degraded (t_7c865ae4 inbox) replay automatically without callers
+// having to poll. The hook runs in its own goroutine — a slow drain never
+// stalls the probe ticker.
+//
 // The probe runs in its own goroutine per tick so a hung embedder cannot
 // stall the ticker loop; the per-probe timeout reaps it.
+//
+// NOTE: the probe closes over the SAME embedder object the handlers share
+// (main.go passes one embedService to both the store and StartEmbeddingProbe,
+// and /admin/embedding mutates that object in place via Set* — no
+// replacement). Verified against the wrappers (Dedup/Gate forward Set* to
+// inner; Service.SetBaseURL assigns the field).
 func StartEmbeddingProbe(embed embedding.Embedder) (stop func()) {
 	if embed == nil {
 		return func() {}
@@ -68,9 +80,20 @@ func StartEmbeddingProbe(embed embedding.Embedder) (stop func()) {
 	done := make(chan struct{})
 	var once atomic.Bool
 
+	var prev atomic.Bool // true once we have served at least one ok
 	run := func() {
 		res := probeOnce(embed, probeTimeout)
+		was := prev.Load()
 		embedProbe.Store(&res)
+		if res.Status != "ok" {
+			prev.Store(false)
+			return
+		}
+		prev.Store(true)
+		if !was {
+			// First ok, or recovery after non-ok: drain the inbox.
+			go fireReplayHook()
+		}
 	}
 	go func() {
 		run() // seed immediately — never serve "unknown" for a full interval

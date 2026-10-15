@@ -42,10 +42,10 @@ Give every agent a personal semantic-memory skill backed by its own Vectorizer w
 
    ```
    curl -s -X POST http://100.90.123.105:8091/api/v1/messages \
-     -H "X-API-Key: vectorizer-local-key" -H "X-Agent: <name>" -H "Content-Type: application/json" \
+     -H "X-API-Key: YOUR_VECTORIZER_API_KEY" -H "X-Agent: <name>" -H "Content-Type: application/json" \
      -d '{"workspace_id":"<agent>","session_id":"provision-check","role":"system","content":"provision check","metadata":{"importance":1}}'
    curl -s -X POST http://100.90.123.105:8091/api/v1/messages/search \
-     -H "X-API-Key: vectorizer-local-key" -H "X-Agent: <name>" -H "Content-Type: application/json" \
+     -H "X-API-Key: YOUR_VECTORIZER_API_KEY" -H "X-Agent: <name>" -H "Content-Type: application/json" \
      -d '{"query":"provision check","n_results":1,"where":{"workspace_id":"<agent>"}}'
    ```
 

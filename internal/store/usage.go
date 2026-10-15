@@ -320,12 +320,15 @@ func (u *UsageTracker) Last(n int) []DayUsage {
 // record" — inventory/telemetry reads the dashboard polls every few seconds,
 // which would drown out real agent signal.
 func ClassifyUsage(method, path string) (action string, log bool) {
-	// Telemetry — never log (dashboard polls these constantly).
+	// Telemetry — never log (dashboard polls these constantly). The pending
+	// inbox lister is telemetry too: during an outage every queued caller
+	// polls it, and that must not drown out real agent signal.
 	switch path {
 	case "/api/v1/health", "/health", "/",
 		"/api/v1/metrics",
 		"/api/v1/usage/daily",
-		"/api/v1/messages/analytics":
+		"/api/v1/messages/analytics",
+		"/api/v1/messages/pending":
 		return "", false
 	}
 	// Retrieval = search-family.

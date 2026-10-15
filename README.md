@@ -75,7 +75,7 @@ python vault/00-index/vault_index.py
 python vault/00-index/graph_build.py  # optional: rebuild GRAPH.json
 
 # Search with lineage
-curl -H "X-API-Key: vectorizer-local-key" -H "Content-Type: application/json" \
+curl -H "X-API-Key: YOUR_VECTORIZER_API_KEY" -H "Content-Type: application/json" \
   -d '{"query":"Bukku automation","where":{"workspace_id":"family"},"n_results":3}' \
   http://localhost:8091/api/v1/messages/search
 # Returns results[].metadata {source_path, header_path, tags, entities, importance, chunk_id, file_hash}
@@ -122,7 +122,10 @@ ALERT_EMAIL_TO=alfirus@gmail.com
 EOF
 
 # Start everything (Vectorizer :8091 + ChromaDB 127.0.0.1:8102 + Dashboard 127.0.0.1:8092)
-docker compose -f docker-compose.server.yml up -d
+# Canonical live entry point — ALWAYS use ./up.sh (it pins BOTH compose files
+# and verifies live config; a bare -f recreate silently drops the untracked
+# live-only docker-compose.override.yml — 2026-10-03 fleet outage).
+./up.sh up
 
 # Verify (vectorizer is the only public port; dashboard/chroma are server-local)
 curl http://100.90.123.105:8091/api/v1/health
@@ -183,7 +186,7 @@ python scripts/graph_build.py                     # rebuild GRAPH.json
 ```bash
 VAULT_ROOT=/data/ai                    # vault base path inside container
 VECTORIZER_URL=http://vectorizer:8091  # Vectorizer API endpoint (NO /api/v1 — code appends it)
-VECTORIZER_API_KEY=vectorizer-local-key # API key
+VECTORIZER_API_KEY=YOUR_VECTORIZER_API_KEY # API key
 REINDEX_PYTHON=python3                  # Python binary to use
 ```
 
@@ -249,7 +252,7 @@ services:
     environment:
       PORT: 8092
       VECTORIZER_URL: http://vectorizer:8091   # NO /api/v1 — code appends it
-      VECTORIZER_API_KEY: vectorizer-local-key
+      VECTORIZER_API_KEY: YOUR_VECTORIZER_API_KEY
       LM_STUDIO_KEY: ${LM_STUDIO_API_KEY}
       LLM_MODEL: qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive
       VAULT_ROOT: /data/ai
@@ -288,8 +291,10 @@ server {
 **⚠️ .env changes require container recreation, not restart:**
 
 ```bash
-# .env is cached at container creation time — restart does NOT re-read it
-docker compose -f docker-compose.server.yml up -d --force-recreate vectorizer
+# .env is cached at container creation time — restart does NOT re-read it.
+# ALWAYS recreate via ./up.sh (pins docker-compose.server.yml +
+# docker-compose.override.yml); a bare -f recreate drops live-only config.
+./up.sh recreate vectorizer
 ```
 
 **⚠️ Vault permissions:** Files inside `/opt/vectorizer/vault-data/` must be writable by the container (uid 1001 `nextjs`). If you see `PermissionError: [Errno 13] Permission denied` on `MEMORY_INDEX.json`:
@@ -543,7 +548,7 @@ GET /api/v1/code/symbols?workspace_id=code_vectorizer&file=trace.go
 Set `DEFAULT_API_KEY` in `.env` to enable API key authentication:
 
 ```bash
-curl -H "X-API-Key: vectorizer-local-key" \
+curl -H "X-API-Key: YOUR_VECTORIZER_API_KEY" \
   http://localhost:8091/api/v1/messages \
   -d '{"workspace_id":"ws-abc","session_id":"sess-def","role":"user","content":"test"}'
 ```
@@ -624,7 +629,7 @@ Each workspace maps to a separate ChromaDB collection: `ws_<workspace_id>`. This
 MCP (Claude Desktop, OpenCode, OpenClaw, Hermes via `mcp-remote`):
 
 ```json
-{"mcpServers":{"vectorizer":{"command":"node","args":["./mcp/dist/index.js"],"env":{"VECTORIZER_URL":"http://localhost:8091","VECTORIZER_API_KEY":"vectorizer-local-key","VECTORIZER_WORKSPACE_ID":"family"}}}}
+{"mcpServers":{"vectorizer":{"command":"node","args":["./mcp/dist/index.js"],"env":{"VECTORIZER_URL":"http://localhost:8091","VECTORIZER_API_KEY":"YOUR_VECTORIZER_API_KEY","VECTORIZER_WORKSPACE_ID":"family"}}}}
 ```
 
 SDKs: `sdks/typescript` (`@vectorizer/sdk`) + `sdks/python` (`vectorizer-ai`) — `new Vectorizer({baseUrl, apiKey}).search("...")`.
