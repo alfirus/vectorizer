@@ -91,6 +91,49 @@ func main() {
 	stopEmbedProbe := store.StartEmbeddingProbe(embedService)
 	defer stopEmbedProbe()
 
+	// Deferred-update replay (t_7c865ae4): when the probe flips to ok after
+	// a degraded window, queued PUTs replay through the write-first store
+	// paths. The drain checks the probe again inside the goroutine so a
+	// flapping probe cannot replay into a still-dead embedder; mid-replay
+	// embed failures re-queue (attempts+1, parked after MaxReplayAttempts),
+	// they never destroy the underlying record.
+	//
+	// Startup race (verified live 2026-10-03): the once-only recovery hook is
+	// consumed by the FIRST ok — which on a healthy boot arrives before any
+	// outage, draining an empty inbox, so a LATER real degraded→ok
+	// transition fires nothing. Belt and suspenders: keep the hook for the
+	// degraded-boot case, AND run a periodic reconciler (every probeInterval)
+	// that drains whenever the probe is ok. DrainPendingUpdates is
+	// single-flight and replay is idempotent (coalesced, write-first), so
+	// overlapping passes collapse to wasted no-ops, never double applies.
+	// The reconciler replaces nothing: the hook gives prompt replay on the
+	// transition tick, the ticker covers hook-consumed/hook-missed cases.
+	drainPending := func() {
+		hp := store.EmbeddingHealth()
+		pending := store.PendingCount()
+		// Log only the states worth a line: a healthy "ok/0" tick every 30s
+		// is noise. Anything else (backlog waiting, embedder down) stays loud.
+		if pending > 0 || hp.Status != "ok" {
+			fmt.Printf("drain tick: embed_status=%s pending_count=%d\n", hp.Status, pending)
+		}
+		if hp.Status != "ok" {
+			return
+		}
+		applied, requeued, failed := store.DrainPendingUpdates(vecStore.ApplyPendingUpdate)
+		if applied+requeued+failed > 0 {
+			fmt.Printf("pending replay: applied=%d requeued=%d failed=%d remaining=%d\n",
+				applied, requeued, failed, store.PendingCount())
+		}
+	}
+	store.SetReplayHook(func() { go drainPending() })
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			drainPending()
+		}
+	}()
+
 	// Initialize LLM brain (optional)
 	var brain *llmbrain.Service
 	if cfg.LLMEnabled {
@@ -154,6 +197,16 @@ func main() {
 
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
+		// Immutable: Fiber's Params()/Get()/Query() hand out unsafe strings
+		// that alias the pooled ctx path/header buffers when Immutable is off
+		// (the default). Anything stored past the request then changes when
+		// the next request reuses that buffer — t_7c865ae4 caught a queued
+		// message_id mutating from "deadbeef-…" to "pending2-…" that way and
+		// the replay failing with "message not found". Fiber's own docs on
+		// these getters say: "Returned value is only valid within the handler.
+		// Do not store any references. Make copies or use the Immutable
+		// setting instead." We pay one small copy per string.
+		Immutable: true,
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
 			if e, ok := err.(*fiber.Error); ok {
@@ -305,7 +358,7 @@ func main() {
 			wbSkippedRO = wb.SkippedRO()
 			wbDepth = wb.QueueDepth()
 		}
-		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total Total messages added\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total %d\n# HELP vectorizer_searches_total Total searches\n# TYPE vectorizer_searches_total counter\nvectorizer_searches_total %d\n# HELP vectorizer_deriver_drops_total Facts discarded on full deriver queue\n# TYPE vectorizer_deriver_drops_total counter\nvectorizer_deriver_drops_total %d\n# HELP vectorizer_deriver_queue_depth Pending deriver backlog\n# TYPE vectorizer_deriver_queue_depth gauge\nvectorizer_deriver_queue_depth %d\n# HELP vectorizer_writeback_writes_total Staging markdown appends\n# TYPE vectorizer_writeback_writes_total counter\nvectorizer_writeback_writes_total %d\n# HELP vectorizer_writeback_drops_total Turns lost on full writeback queue\n# TYPE vectorizer_writeback_drops_total counter\nvectorizer_writeback_drops_total %d\n# HELP vectorizer_writeback_skipped_ro_total Turns skipped (vault read-only)\n# TYPE vectorizer_writeback_skipped_ro_total counter\nvectorizer_writeback_skipped_ro_total %d\n# HELP vectorizer_writeback_queue_depth Pending writeback backlog\n# TYPE vectorizer_writeback_queue_depth gauge\nvectorizer_writeback_queue_depth %d\n", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load(), deriverDrops, deriverDepth, wbWrites, wbDrops, wbSkippedRO, wbDepth))
+		return c.SendString(fmt.Sprintf("# HELP vectorizer_up 1 if up\n# TYPE vectorizer_up gauge\nvectorizer_up 1\n# HELP vectorizer_messages_total Total messages added\n# TYPE vectorizer_messages_total counter\nvectorizer_messages_total %d\n# HELP vectorizer_searches_total Total searches\n# TYPE vectorizer_searches_total counter\nvectorizer_searches_total %d\n# HELP vectorizer_deriver_drops_total Facts discarded on full deriver queue\n# TYPE vectorizer_deriver_drops_total counter\nvectorizer_deriver_drops_total %d\n# HELP vectorizer_deriver_queue_depth Pending deriver backlog\n# TYPE vectorizer_deriver_queue_depth gauge\nvectorizer_deriver_queue_depth %d\n# HELP vectorizer_writeback_writes_total Staging markdown appends\n# TYPE vectorizer_writeback_writes_total counter\nvectorizer_writeback_writes_total %d\n# HELP vectorizer_writeback_drops_total Turns lost on full writeback queue\n# TYPE vectorizer_writeback_drops_total counter\nvectorizer_writeback_drops_total %d\n# HELP vectorizer_writeback_skipped_ro_total Turns skipped (vault read-only)\n# TYPE vectorizer_writeback_skipped_ro_total counter\nvectorizer_writeback_skipped_ro_total %d\n# HELP vectorizer_writeback_queue_depth Pending writeback backlog\n# TYPE vectorizer_writeback_queue_depth gauge\nvectorizer_writeback_queue_depth %d\n# HELP vectorizer_pending_updates Deferred PUTs awaiting embed recovery\n# TYPE vectorizer_pending_updates gauge\nvectorizer_pending_updates %d\n# HELP vectorizer_pending_drops_total Queued updates evicted by the inbox bound\n# TYPE vectorizer_pending_drops_total counter\nvectorizer_pending_drops_total %d\n", metrics.MessagesAdded.Load(), metrics.SearchesTotal.Load(), deriverDrops, deriverDepth, wbWrites, wbDrops, wbSkippedRO, wbDepth, store.PendingCount(), store.PendingDrops()))
 	})
 
 	// Workspaces ()
@@ -457,6 +510,11 @@ func main() {
 	// for a message ID; update is delete + re-add under the same ID).
 	api.Put("/messages/:id", messagesHandler.UpdateMessageContent)
 	api.Delete("/messages/:id", messagesHandler.DeleteMessage)
+	// Deferred-update inbox (t_7c865ae4): queued-while-degraded PUTs, replayed
+	// on probe recovery. Registered BEFORE /messages/:id on purpose: Fiber
+	// matches routes in registration order, so a later /messages/:id would
+	// swallow "pending" as an id param.
+	api.Get("/messages/pending", messagesHandler.ListPendingUpdates)
 	api.Get("/messages/:id", messagesHandler.GetMessageByID)
 
 	// Session context with rolling-window tokens budgeting

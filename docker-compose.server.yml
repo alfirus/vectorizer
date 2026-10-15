@@ -58,7 +58,7 @@ services:
       start_period: 20s
 
   chromadb:
-    image: chromadb/chroma:1.0.0
+    image: chromadb/chroma:1.1.0
     container_name: vectorizer-chromadb
     ports:
       - "127.0.0.1:8102:8000"
@@ -67,11 +67,22 @@ services:
       # — PERSIST_DIRECTORY env is ignored. Mount here or vectors live in the
       # container layer and a recreate wipes everything.
       - chroma_data:/data
+      # t_19c13e16: chroma image ships no HTTP client (no wget/curl/python in
+      # PATH) and dash (no /dev/tcp), so the probe uses the host's statically
+      # linked /usr/bin/busybox (verified BUSYBOX_STATIC_OK 2026-10-07).
+      # /api/v2/heartbeat returns 200 (v1 returns 410 on chroma 1.0.0).
+      - /usr/bin/busybox:/busybox:ro
     environment:
       IS_PERSISTENT: "TRUE"
       CHROMA_SERVER_HOST: 0.0.0.0
       CHROMA_SERVER_HTTP_PORT: 8000
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/api/v2/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   dashboard:
     build: ../vectorizer-dashboard

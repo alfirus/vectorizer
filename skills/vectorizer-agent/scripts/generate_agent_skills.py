@@ -49,12 +49,12 @@ def parse_roles(path):
     return roles
 
 
-def render(template, agent, role_title, bullets):
+def render(template, agent, role_title, bullets, api_key):
     return (
         template.replace("{{agent_name}}", agent)
         .replace("{{workspace}}", agent)  # workspace = agent name (enforced convention)
         .replace("{{role_title}}", role_title)
-        .replace("{{role_bullets}}", bullets)
+        .replace("{{role_bullets}}", bullets).replace("{{api_key}}", api_key)
     )
 
 
@@ -94,7 +94,9 @@ def main():
     ap.add_argument("--ensure-workspace", action="store_true",
                     help="create the Vectorizer workspace if missing and verify it")
     ap.add_argument("--api-base", default="http://100.90.123.105:8091/api/v1")
-    ap.add_argument("--api-key", default="vectorizer-local-key")
+    ap.add_argument("--api-key",
+                    default=os.environ.get("VECTORIZER_API_KEY") or os.environ.get("DEFAULT_API_KEY") or "",
+                    help="Vectorizer REST X-API-Key (falls back to VECTORIZER_API_KEY / DEFAULT_API_KEY env)")
     args = ap.parse_args()
 
     if not args.agent and not args.all:
@@ -116,7 +118,7 @@ def main():
         out = args.out or os.path.join(args.skills_root, agent, SKILL_REL_PATH)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w", encoding="utf-8", newline="\n") as f:
-            f.write(render(template, agent, role_title, bullets))
+            f.write(render(template, agent, role_title, bullets, args.api_key))
         ws = "n/a"
         if args.ensure_workspace:
             ws = ensure_workspace(agent, args.api_base, args.api_key)

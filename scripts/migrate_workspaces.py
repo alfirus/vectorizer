@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Migrate all workspaces from local Vectorizer to server via SSH."""
 import json
+import os
 import time
 import urllib.request
 import subprocess
 
 LOCAL_URL = "http://localhost:8091/api/v1"
-API_KEY = "vectorizer-local-key"
+API_KEY = os.environ.get("VECTORIZER_API_KEY") or os.environ.get("DEFAULT_API_KEY") or ""
 SSH_KEY = "C:/Users/alfir/.ssh/personal"
 SERVER = "ubuntu@139.99.131.127"
 
@@ -95,11 +96,13 @@ def import_workspace(ws_id, messages):
     return imported
 
 def main():
+    if not API_KEY:
+        raise SystemExit("set VECTORIZER_API_KEY (Vectorizer REST key) before running")
     # Get workspaces
     local_data = api_get(LOCAL_URL, "/workspaces")
     local_ws = [w["id"] for w in local_data["workspaces"]]
     
-    server_result = ssh_cmd("curl -s http://127.0.0.1:8091/api/v1/workspaces -H 'X-API-Key: vectorizer-local-key'")
+    server_result = ssh_cmd(f"curl -s http://127.0.0.1:8091/api/v1/workspaces -H 'X-API-Key: {API_KEY}'")
     server_ws = [w["id"] for w in json.loads(server_result).get("workspaces", [])]
     
     missing = [ws for ws in local_ws if ws not in server_ws]
@@ -120,7 +123,7 @@ def main():
     
     # Verify
     print("\n--- Verification ---")
-    server_result = ssh_cmd("curl -s http://127.0.0.1:8091/api/v1/workspaces -H 'X-API-Key: vectorizer-local-key'")
+    server_result = ssh_cmd(f"curl -s http://127.0.0.1:8091/api/v1/workspaces -H 'X-API-Key: {API_KEY}'")
     final_ws = json.loads(server_result).get("workspaces", [])
     print(f"Server workspaces: {[w['id'] for w in final_ws]}")
     print(f"Total imported: {total_imported} messages")

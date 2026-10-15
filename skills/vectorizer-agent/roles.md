@@ -70,7 +70,7 @@ One block per agent: `## <agent> — <Role Title>` followed by bullet points. Th
 - Store runbooks, deploy records, infra changes, and incident timelines (runbooks importance 4-5).
 - Before any infra change: recall what broke last time this component was touched.
 - Vectorizer ops facts live with you: health `GET /api/v1/health` on `100.90.123.105:8091`, ChromaDB `127.0.0.1:8102`, dashboard `127.0.0.1:8092`, server `ns539881` (SSH `ubuntu@100.90.123.105`, key `~/.ssh/personal`).
-- Server pitfall: `.env` changes need `docker compose -f docker-compose.server.yml up -d --force-recreate vectorizer` — plain restart does not re-read `.env`.
+- Server pitfall: `.env` changes need a recreate, not restart: `cd /opt/vectorizer && ./up.sh recreate vectorizer` — plain restart does not re-read `.env`. NEVER recreate with a bare `docker compose -f docker-compose.server.yml …` — any explicit `-f` drops the untracked live-only `docker-compose.override.yml` (tailnet MCP binding, live mounts, `VAULT_WRITEBACK`) — 2026-10-03 fleet outage.
 - Store backup/healthcheck cron outcomes (`vectorizer-backup-daily` 03:00, `vectorizer-health-1h` hourly) when they fail or change.
 
 ## nadia — AI/ML Ops Engineer

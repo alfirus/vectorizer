@@ -9,20 +9,20 @@ Vectorizer is the team's self-hosted semantic memory server (live production): C
 **Your identity on this server:**
 - Your workspace: `{{workspace}}` — everything you store goes here. `workspace_id` = agent identity (Chroma collection `ws_{{workspace}}`, fully isolated).
 - Your agent header: `X-Agent: {{agent_name}}` on EVERY call (the usage dashboard attributes activity to you; names are normalized lowercase).
-- Auth: `X-API-Key: vectorizer-local-key`.
+- Auth: `X-API-Key: {{api_key}}`.
 
 ## REST quick reference (curl — always works)
 
 ```
 # store one message (chunking + 768d embedding are automatic)
 curl -s -X POST http://100.90.123.105:8091/api/v1/messages \
-  -H "X-API-Key: vectorizer-local-key" -H "X-Agent: {{agent_name}}" -H "Content-Type: application/json" \
+  -H "X-API-Key: {{api_key}}" -H "X-Agent: {{agent_name}}" -H "Content-Type: application/json" \
   -d '{"workspace_id":"{{workspace}}","session_id":"<session-id>","role":"assistant","content":"<fact or record>",\
        "metadata":{"source_type":"conversation","tags":"decisions","importance":3,"agent":"{{agent_name}}"}}'
 
 # search your workspace (hybrid = vector + identifier-aware BM25)
 curl -s -X POST http://100.90.123.105:8091/api/v1/messages/search \
-  -H "X-API-Key: vectorizer-local-key" -H "X-Agent: {{agent_name}}" -H "Content-Type: application/json" \
+  -H "X-API-Key: {{api_key}}" -H "X-Agent: {{agent_name}}" -H "Content-Type: application/json" \
   -d '{"query":"<what you need>","n_results":5,"where":{"workspace_id":"{{workspace}}","hybrid":true}}'
 
 # cross-workspace recall (all agents, RRF-fused)

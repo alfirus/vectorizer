@@ -64,6 +64,25 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
+	// Create-path degraded signal (t_7c865ae4): POST embeds synchronously on
+	// the request path, so while the probe is degraded this call would hang
+	// up to EMBED_TIMEOUT_SECS x retries (~26s since t_382c7f47, ~30min
+	// before) and store nothing, with no distinct error class. Fail fast
+	// with 503 + the probe state instead. Unlike PUT, creates are NOT
+	// queued: the server mints the id, so queue-then-replay would fork
+	// identities — callers retry the same body when /health reports ok.
+	// EmbeddingHealth() is the cached background-probe result: no network
+	// I/O on the request path. EMBED_TIMEOUT_SECS semantics for the
+	// healthy path are untouched.
+	if hp := store.EmbeddingHealth(); hp.Status != "ok" {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error":           "embedding path not healthy - create refused, nothing stored",
+			"embedding":       hp.Status,
+			"embedding_error": hp.LastErr,
+			"stored":          false,
+			"hint":            "retry this exact body when GET /api/v1/health reports embedding ok",
+		})
+	}
 	if req.WorkspaceID == "" || req.SessionID == "" || req.Role == "" || req.Content == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id, session_id, role, and content are required"})
 	}
@@ -151,6 +170,17 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 	if len(req.Messages) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "messages array is required",
+		})
+	}
+	// Same degraded fast-signal as single create (t_7c865ae4): a batch would
+	// otherwise burn one full embed-timeout per message and store nothing.
+	if hp := store.EmbeddingHealth(); hp.Status != "ok" {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error":           "embedding path not healthy - batch refused, nothing stored",
+			"embedding":       hp.Status,
+			"embedding_error": hp.LastErr,
+			"stored":          false,
+			"hint":            "retry this exact body when GET /api/v1/health reports embedding ok",
 		})
 	}
 
@@ -544,6 +574,47 @@ func (h *MessagesHandler) UpdateMessageContent(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
+	// Cheap shape validation FIRST so malformed PUTs still get 400 (not a
+	// queue ticket) while degraded. Workspace existence is NOT checked here:
+	// that needs Chroma scans and the replay resolves it, parking a clear
+	// failed entry when the id never existed.
+	if len(req.Sections) == 0 && req.Content == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content or sections are required"})
+	}
+	if len(req.Content) > 100000 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content too large (max 100k chars)"})
+	}
+	if req.Role != "" && req.Role != "user" && req.Role != "assistant" && req.Role != "system" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "role must be 'user', 'assistant', or 'system'"})
+	}
+	for _, n := range []string{req.WorkspaceID, req.SessionID} {
+		if n != "" && !models.ValidateResourceName(n) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id format"})
+		}
+	}
+	// Deferred-update inbox (t_7c865ae4, follow-up to the t_5df7921d 409
+	// guard): both the full replace and the section splice re-embed, so
+	// running them while the embed path is degraded used to destroy records
+	// (t_0927b244, 2026-09-27). Instead of a bare 409 the caller has to
+	// remember to retry, the PUT is accepted into the pending inbox (202
+	// queued) and replayed automatically through the write-first store
+	// paths when the probe returns ok. EmbeddingHealth() is the cached
+	// background-probe result - no network I/O on the request path.
+	if hp := store.EmbeddingHealth(); hp.Status != "ok" {
+		queued, qerr := h.enqueuePendingUpdate(c, messageID, req.Content, req.Sections, req.WorkspaceID, req.SessionID, req.Role, req.Metadata, hp.Status, hp.LastErr)
+		if qerr != nil {
+			// Queue unusable (full and nothing evictable): keep the old
+			// refuse-and-hint posture so nothing is silently dropped.
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"error":           "embedding path not healthy - refusing message update to avoid data loss",
+				"embedding":       hp.Status,
+				"embedding_error": hp.LastErr,
+				"queue_error":     qerr.Error(),
+				"hint":            "pending queue unavailable; retry when GET /api/v1/health reports embedding ok",
+			})
+		}
+		return c.Status(fiber.StatusAccepted).JSON(queued)
+	}
 	// Splice path: named ## sections replace in place, only changed chunks
 	// re-embedded, message ID stable. Unknown sections append (upsert).
 	if len(req.Sections) > 0 {
@@ -623,4 +694,56 @@ func (h *MessagesHandler) GetMessageByID(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found", "workspace_id": ws})
 	}
 	return c.JSON(fiber.Map{"id": messageID, "workspace_id": ws, "chunks": docs, "count": len(docs)})
+}
+
+// enqueuePendingUpdate validates + stores a deferred PUT while degraded and
+// builds the 202 queued response. Sanitization mirrors the live path so the
+// replay stores exactly what a healthy-path PUT would have.
+func (h *MessagesHandler) enqueuePendingUpdate(c *fiber.Ctx, messageID, content string, sections map[string]string, workspaceID, sessionID, role string, meta map[string]interface{}, probeStatus, probeErr string) (fiber.Map, error) {
+	safeContent := models.SanitizeString(content)
+	safeSections := map[string]string{}
+	for k, v := range sections {
+		safeSections[k] = models.SanitizeString(v)
+	}
+	requester := c.Get("X-Agent")
+	entry, err := store.EnqueuePendingUpdate(&store.PendingUpdate{
+		MessageID:   messageID,
+		WorkspaceID: workspaceID,
+		Content:     safeContent,
+		Sections:    safeSections,
+		SessionID:   sessionID,
+		Role:        role,
+		Metadata:    meta,
+		Requester:   requester,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := fiber.Map{
+		"queued":       true,
+		"id":           messageID,
+		"workspace_id": entry.WorkspaceID,
+		"pending":      store.PendingCount(),
+		"embedding":    probeStatus,
+		"hint":         "update queued behind the embed outage; it replays automatically when GET /api/v1/health reports embedding ok",
+	}
+	if probeErr != "" {
+		resp["embedding_error"] = probeErr
+	}
+	if len(safeSections) > 0 {
+		keys := make([]string, 0, len(safeSections))
+		for k := range safeSections {
+			keys = append(keys, k)
+		}
+		resp["sections_queued"] = keys
+	}
+	return resp, nil
+}
+
+// ListPendingUpdates exposes the deferred-update inbox.
+// GET /messages/pending?workspace_id=... — telemetry-safe (no embed spend,
+// no Chroma I/O), so it stays fast during the outage it reports on.
+func (h *MessagesHandler) ListPendingUpdates(c *fiber.Ctx) error {
+	entries := store.ListPendingUpdates(c.Query("workspace_id"))
+	return c.JSON(fiber.Map{"pending": entries, "count": len(entries)})
 }
