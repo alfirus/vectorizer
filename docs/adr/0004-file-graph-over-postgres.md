@@ -1,8 +1,9 @@
 # ADR 0004: File-graph (vault markdown + GRAPH.json) over Postgres
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-08
 **Authors:** Lina (Tech Lead, retroactive record of shipped decision)
+**Accepted by:** Maisarah (Engineering Manager), 2026-11-08 — approved as-is during the P0/P1 publish review (t_0335f460 / t_e6be7d6c)
 
 ---
 
