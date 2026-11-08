@@ -17,6 +17,9 @@
 # Step 5b (t_d7130e95): off-host sync via vectorizer-offhost-sync.sh (restic-over-ssh
 # to the office Synology) runs inside this same 03:00 slot after step 5 — no second
 # schedule. Until the repo is provisioned it logs SKIP and stays green.
+# Resilience (t_1c36ece4): step 0b pre-flight waits out apt/dpkg activity and recent
+# dockerd restarts; step 1 retries each docker snapshot invocation 3x60s before
+# failing loudly (2026-10-16: dockerd restart mid-backup killed attempt 1 outright).
 # Restore: see ops-cron/README.md (live values in the private runbook).
 set -uo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -62,16 +65,101 @@ done
 curl -sf -m 10 http://127.0.0.1:8102/api/v2/version >/dev/null \
   || fail "chromadb not reachable on 127.0.0.1:8102"
 
+# --- 0b. pre-flight guard: package-manager / dockerd stability (t_1c36ece4) --------
+# 2026-10-16: an apt upgrade (docker-ce + containerd.io) restarted dockerd
+# mid-backup and killed the snapshot helper. If an upgrade is in flight or
+# dockerd restarted recently, wait for things to settle instead of snapshotting
+# into a restart. Advisory only: after PREFLIGHT_MAX_WAIT_S we proceed hot with
+# a WARN — the snapshot retry loop in step 1 is the real safety net.
+PREFLIGHT_STABLE_S=600
+PREFLIGHT_MAX_WAIT_S=600
+PREFLIGHT_POLL_S=30
+apt_in_flight() {
+  # prints a one-line reason and returns 0 while a package manager is active.
+  # Uses fuser on the apt/dpkg locks (the real signal — held only while working)
+  # plus a process check that ignores the always-present
+  # unattended-upgrade-shutdown --wait-for-signal stub.
+  for L in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \
+           /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do
+    if [ -e "$L" ] && fuser "$L" >/dev/null 2>&1; then echo "apt/dpkg lock held: $L"; return 0; fi
+  done
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    cmd=$(ps -o args= -p "$pid" 2>/dev/null) || continue
+    case "$cmd" in *unattended-upgrade-shutdown*--wait-for-signal*) continue;; *) echo "package-manager active: $cmd"; return 0;; esac
+  done <<PIDS
+$(pgrep -f 'apt-get|aptitude|dpkg|unattended-upgr' 2>/dev/null)
+PIDS
+  return 1
+}
+dockerd_fresh() {
+  # prints a one-line reason and returns 0 while dockerd restarted recently.
+  age=$(ps -o etimes= -C dockerd 2>/dev/null | tr -d ' ' | head -1)
+  case "$age" in ''|*[!0-9]*) echo "dockerd not visible via ps";; *)
+    if [ "$age" -lt "$PREFLIGHT_STABLE_S" ]; then echo "dockerd restarted ${age}s ago (<${PREFLIGHT_STABLE_S}s stable)"; return 0; fi;; esac
+  return 1
+}
+preflight_wait() {
+  waited=0
+  while [ "$waited" -lt "$PREFLIGHT_MAX_WAIT_S" ]; do
+    reason=""
+    r=$(apt_in_flight) && reason="$r"
+    r=$(dockerd_fresh) && reason="${reason}${reason:+; }$r"
+    if [ -z "$reason" ]; then
+      [ "$waited" -gt 0 ] && log "pre-flight: settled after ${waited}s"
+      return 0
+    fi
+    log "pre-flight: waiting ${PREFLIGHT_POLL_S}s ($reason) [${waited}s/${PREFLIGHT_MAX_WAIT_S}s]"
+    sleep "$PREFLIGHT_POLL_S"
+    waited=$(( waited + PREFLIGHT_POLL_S ))
+  done
+  log "WARN pre-flight: still unsettled after ${PREFLIGHT_MAX_WAIT_S}s — proceeding hot (snapshot retry is the safety net)"
+  return 0
+}
+preflight_wait
+
 # --- 1. consistent sqlite snapshot + write-activity check -------------------------
 # If ingestion is running right now, wait (up to 2 more minutes) for a quiet window so
 # the tarball can't catch a half-written .bin file. Proceeds hot with a WARN otherwise.
 QUIET=0
 SNAP=""
 FILES=0; BYTES=0; COLS=0; DOCS=0
+# t_1c36ece4: a transient docker failure (e.g. dockerd restart mid-backup ->
+# `error waiting for container: unexpected EOF`) must NOT kill the nightly run
+# on attempt 1. Every docker invocation gets SNAP_RETRIES tries with
+# SNAP_RETRY_WAIT_S backoff, on ANY failure mode: non-zero exit, empty output,
+# or non-JSON output. Only after exhausting retries do we fail loudly.
+SNAP_RETRIES=3
+SNAP_RETRY_WAIT_S=60
+SNAP_LAST_ERR=""
+run_snapshot() {
+  # $1 = file to write the JSON snapshot line to; returns 0 on success, 1
+  # after exhausting retries. Runs in the CURRENT shell (no command
+  # substitution) so SNAP_LAST_ERR propagates to the caller's fail() line and
+  # diagnostics stream straight into the cron log in real time.
+  _try=1
+  while [ "$_try" -le "$SNAP_RETRIES" ]; do
+    _out=$(docker run --rm -v "$VOL":/data -v "$OPS":/scripts:ro -v "$BK":/backup \
+             node:24-alpine node /scripts/chroma_backup.js --date "$DATE" 2>&1)
+    _rc=$?
+    if [ "$_rc" -eq 0 ] && [ -n "$_out" ] && echo "$_out" | jq -e . >/dev/null 2>&1; then
+      echo "$_out" >"$1"
+      return 0
+    fi
+    if [ "$_try" -lt "$SNAP_RETRIES" ]; then
+      log "WARN snapshot docker run failed (quiet-attempt $attempt try $_try/$SNAP_RETRIES, rc=$_rc): $(echo "$_out" | tr '\n' '; ' | cut -c1-300) — retrying in ${SNAP_RETRY_WAIT_S}s"
+      sleep "$SNAP_RETRY_WAIT_S"
+    else
+      SNAP_LAST_ERR="rc=$_rc out=$(echo "$_out" | tr '\n' '; ' | cut -c1-500)"
+    fi
+    _try=$((_try + 1))
+  done
+  return 1
+}
 for attempt in 1 2 3; do
-  SNAP=$(docker run --rm -v "$VOL":/data -v "$OPS":/scripts:ro -v "$BK":/backup \
-           node:24-alpine node /scripts/chroma_backup.js --date "$DATE" 2>&1) \
-    || fail "sqlite snapshot attempt $attempt failed: $SNAP"
+  SNAP_JSON="$STATE/snap-$DATE.json"
+  run_snapshot "$SNAP_JSON" || fail "sqlite snapshot attempt $attempt failed after $SNAP_RETRIES tries: $SNAP_LAST_ERR"
+  SNAP=$(cat "$SNAP_JSON"); rm -f "$SNAP_JSON"
   echo "$SNAP" | jq -e . >/dev/null 2>&1 || fail "snapshot returned non-JSON: $SNAP"
   FILES=$(echo "$SNAP" | jq -r .files)
   BYTES=$(echo "$SNAP" | jq -r .bytes)

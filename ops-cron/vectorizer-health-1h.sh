@@ -10,7 +10,10 @@
 #                    GET /count each (expect numeric) + one POST /get limit=1
 #                    (expect ids). Catches the compactor/backfill fault class
 #                    (t_d1b3b72e) that stays green on version+count>0 alone.
-#                    Sample: ws_code_ags + probe-content-only + ws__global.
+#                    Sample: ws_code_ags + probe-content-only + ws_global (the
+#                    _global workspace's canonical collection since 807760b;
+#                    the pre-canonical raw name ws__global is tolerated as a
+#                    read-only legacy alias, never required).
 #                    Recurrence runbook: cd <server-app-dir> && ./up.sh recreate
 #                    vectorizer-chromadb (never bare -f; see up.sh header).
 #   dashboard        HTTP on 127.0.0.1:8092 (200/307)
@@ -79,23 +82,48 @@ fi
 
 # sampled per-collection count/get probe (t_4a2e438e; fault class t_d1b3b72e).
 # Fixed 3-collection sample keeps the hourly run cheap; read-only, never wipes.
+# The _global workspace's canonical collection is ws_global: ResolveWorkspaceID
+# canonicalizes "_global" -> "global" (807760b), so GetCollectionName("_global")
+# is "ws_global" (same for the ws_global_conclusions/_reasoning sidecars live
+# on prod). The pre-canonical raw concatenation ws__global is tolerated as a
+# read-only legacy alias — a leftover legacy collection must never false-page,
+# but neither name existing IS a failure (t_89fd9d50: false critical 01:00 UTC
+# 2026-11-08 when the probe required ws__global while prod only had ws_global).
 if [ "$CH_OK" = "yes" ]; then
   READ_FAILS=()
   READ_OK=()
   GET_ID=""
-  for _name in ws_code_ags probe-content-only ws__global; do
-    _id=$(printf '%s' "$COL_JSON" | jq -r --arg n "$_name" '.[] | select(.name==$n) | .id // empty' 2>/dev/null || true)
+  resolve_id() { # <collection-name> -> id or empty
+    printf '%s' "$COL_JSON" | jq -r --arg n "$1" '.[] | select(.name==$n) | .id // empty' 2>/dev/null || true
+  }
+  probe_one() { # <label> <collection-id>
+    local _label="$1" _pid="$2" _cnt
+    [ -z "$GET_ID" ] && GET_ID="$_pid:$_label"
+    _cnt=$(curl -s --max-time 8 "$CH_BASE/$_pid/count" 2>/dev/null || true)
+    case "$_cnt" in
+      ''|*[!0-9]*) READ_FAILS+=("$_label:count=$(printf '%.120s' "$_cnt")") ;;
+      *) READ_OK+=("$_label=$_cnt") ;;
+    esac
+  }
+  for _name in ws_code_ags probe-content-only; do
+    _id=$(resolve_id "$_name")
     if [ -z "$_id" ]; then
       READ_FAILS+=("$_name:missing")
       continue
     fi
-    [ -z "$GET_ID" ] && GET_ID="$_id:$_name"
-    _cnt=$(curl -s --max-time 8 "$CH_BASE/$_id/count" 2>/dev/null || true)
-    case "$_cnt" in
-      ''|*[!0-9]*) READ_FAILS+=("$_name:count=$(printf '%.120s' "$_cnt")") ;;
-      *) READ_OK+=("$_name=$_cnt") ;;
-    esac
+    probe_one "$_name" "$_id"
   done
+  _global_id=$(resolve_id ws_global)
+  if [ -n "$_global_id" ]; then
+    probe_one ws_global "$_global_id"
+  else
+    _legacy_id=$(resolve_id ws__global)
+    if [ -n "$_legacy_id" ]; then
+      probe_one "ws__global[legacy-alias-of-ws_global]" "$_legacy_id"
+    else
+      READ_FAILS+=("ws_global:missing (legacy ws__global also absent)")
+    fi
+  fi
   if [ "${#READ_OK[@]}" -gt 0 ]; then
     _gid=${GET_ID%%:*}; _gname=${GET_ID#*:}
     _get=$(curl -s --max-time 8 -X POST "$CH_BASE/$_gid/get" \

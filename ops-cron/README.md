@@ -29,7 +29,9 @@ persistent. The sqlite copy is consistent regardless. Chroma is **never stopped*
 
 `vectorizer-api` (8091 `/api/v1/health` → 200), `chromadb` (8102 version → 200 **and**
 collections > 0), `chromadb-read` (sampled readability, t_4a2e438e: resolve
-`ws_code_ags` + `probe-content-only` + `ws__global` to UUIDs, GET `/count` each
+`ws_code_ags` + `probe-content-only` + `ws_global` (the `_global` workspace's
+canonical collection since 807760b; legacy pre-canonical `ws__global` tolerated
+as a read-only alias, t_89fd9d50) to UUIDs, GET `/count` each
 expecting a numeric body, plus one POST `/get` limit=1 expecting ids — catches the
 compactor/backfill fault class from t_d1b3b72e that stays green on version+count>0;
 recurrence runbook `cd <server-app-dir> && ./up.sh recreate vectorizer-chromadb`),
