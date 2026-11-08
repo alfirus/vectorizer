@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -58,6 +59,40 @@ func (s *Store) ListWorkspaces() ([]string, error) {
 		out = append(out, strings.TrimPrefix(c.Name, "ws_"))
 	}
 	return out, nil
+}
+
+// Fleet-wide search exclusion (t_ce4e18be, upstreamed via t_247beff1): workspaces
+// that must never surface in UNSCOPED search paths — SearchAllWorkspaces
+// (/messages/search/all) and unscoped SearchWithScopeAndRerank (empty
+// workspaceID, which fans out over every ws_* collection, including the
+// hybrid vector leg and unscoped Ask). A scoped read that NAMES the
+// workspace keeps working: this is search visibility, not storage ACL,
+// so the owner path (scoped search/get/list) is untouched.
+//
+// Tunable via SEARCH_EXCLUDE_WORKSPACES (CSV, case-insensitive);
+// default "finance". ListWorkspaces and analytics intentionally still
+// report the workspace — hiding it there would break ownership/health
+// checks that assert the workspace exists.
+func searchExcludedSet() map[string]bool {
+	raw := os.Getenv("SEARCH_EXCLUDE_WORKSPACES")
+	if raw == "" {
+		raw = "finance"
+	}
+	out := map[string]bool{}
+	for _, w := range strings.Split(raw, ",") {
+		w = strings.ToLower(strings.TrimSpace(w))
+		if w != "" {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+// SearchExcludedWorkspace reports whether id is hidden from fleet-wide
+// search. Exported so the HTTP handlers enforce the same set as the
+// store-level fan-out.
+func SearchExcludedWorkspace(id string) bool {
+	return searchExcludedSet()[strings.ToLower(strings.TrimSpace(id))]
 }
 
 // CountReadableRows counts the rows actually readable under the workspace

@@ -546,6 +546,12 @@ func (s *Store) SearchWithScopeAndRerank(query string, workspaceID string, sessi
 			return nil, fmt.Errorf("list collections: %w", err)
 		}
 		for _, c := range collections {
+			// Fleet-wide exclusion (t_ce4e18be, upstreamed via t_247beff1):
+			// private workspaces (default finance) never enter an unscoped
+			// fan-out.
+			if SearchExcludedWorkspace(strings.TrimPrefix(c.Name, "ws_")) {
+				continue
+			}
 			workspaces = append(workspaces, strings.TrimPrefix(c.Name, "ws_"))
 		}
 	}

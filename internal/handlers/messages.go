@@ -494,6 +494,14 @@ func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 	var wg sync.WaitGroup
 
 	for _, wsID := range workspaces {
+		// Fleet-wide exclusion (t_ce4e18be, upstreamed via t_247beff1):
+		// private workspaces (default finance, tunable via
+		// SEARCH_EXCLUDE_WORKSPACES) never surface in cross-workspace
+		// search. Scoped reads that name the workspace directly are
+		// unaffected.
+		if store.SearchExcludedWorkspace(wsID) {
+			continue
+		}
 		wg.Add(1)
 		go func(wsID string) {
 			defer wg.Done()

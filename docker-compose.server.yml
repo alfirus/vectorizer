@@ -19,6 +19,10 @@ services:
       # Live LLM endpoint: private .env only (LM_STUDIO_URL,
       # LM_STUDIO_API_KEY). Never commit the tailnet address.
       LM_STUDIO_URL: ${LM_STUDIO_URL:?set LM_STUDIO_URL in the private .env}
+      # t_ce4e18be (upstreamed via t_247beff1): workspaces hidden from
+      # fleet-wide search (search_all + unscoped search/ask). CSV, default
+      # finance. Scoped reads naming the workspace keep working.
+      SEARCH_EXCLUDE_WORKSPACES: ${SEARCH_EXCLUDE_WORKSPACES:-finance}
       LIBRARIAN_MODE: workflow
       VAULT_ROOT: /data/ai
     volumes:
