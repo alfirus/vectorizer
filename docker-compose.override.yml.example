@@ -1,0 +1,29 @@
+# docker-compose.override.yml.example — LIVE-ONLY overrides (server deployment).
+#
+# Copy to docker-compose.override.yml and fill in the real values on the
+# server ONLY. This file is intentionally untracked: it carries live-only
+# paths/bindings that must never be committed (see up.sh header — a bare
+# `-f` recreate without it caused the 2026-10-03 fleet-wide outage).
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   # edit TAILNET_MCP_IP / mount sources, then ALWAYS use ./up.sh
+#
+# Required live bindings (up.sh verify fails when any is absent):
+#   1. vectorizer-mcp tailnet binding  <tailnet-ip>:8093  (fleet's remote MCP path)
+#   2. vectorizer mounts <repo> -> /data/repo:ro + <code-stage> -> /data/code-stage:ro
+#   3. VAULT_WRITEBACK=true on vectorizer
+
+services:
+  vectorizer:
+    environment:
+      VAULT_WRITEBACK: "true"
+    volumes:
+      # Live repo + code-stage checkouts (read-only inside the container).
+      - /opt/vectorizer:/data/repo:ro
+      - /opt/code-stage:/data/code-stage:ro
+
+  vectorizer-mcp:
+    ports:
+      # Loopback + tailnet ONLY — never a bare public bind.
+      - "127.0.0.1:8093:8093"
+      - "${TAILNET_MCP_IP:-100.90.123.105}:8093:8093"

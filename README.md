@@ -71,8 +71,10 @@ curl http://localhost:8091/api/v1/health
 # {"chromadb":"ok","embedding_model":"text-embedding-nomic-embed-text-v2","llm_enabled":true,"status":"ok","version":"0.3.0"}
 
 # Populate vault (markdown truth → vector index)
-python vault/00-index/vault_index.py
-python vault/00-index/graph_build.py  # optional: rebuild GRAPH.json
+python scripts/vault_index.py --workspace <name>   # e.g. --workspace family
+python scripts/graph_build.py --workspace <name>   # optional: rebuild GRAPH.json
+# (vault/00-index/ is the index dir inside your vault data at
+#  <VAULT_ROOT>/<workspace>/vault/00-index/, not a repo path — see scripts/README.md)
 
 # Search with lineage
 curl -H "X-API-Key: YOUR_VECTORIZER_API_KEY" -H "Content-Type: application/json" \
@@ -682,7 +684,9 @@ vectorizer/
 ├── skills/           # Skills
 ├── sdks/             # TS + Python SDKs
 ├── evals/            # Eval harness
-├── scripts/          # Vault indexer, backup, healthcheck, migration
+├── scripts/          # Vault indexer (vault_index.py, graph_build.py) + migration
+├── vectorizer_backup.py      # Backup automation (repo root)
+├── vectorizer_healthcheck.py # Health monitoring (repo root)
 ├── main.go           # Entry point
 ├── Dockerfile        # Container build
 ├── docker-compose.yml       # Full stack (local)
@@ -693,4 +697,4 @@ vectorizer/
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

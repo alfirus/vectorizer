@@ -41,6 +41,22 @@ fi
 
 COMPOSE=(docker compose -f "$BASE" -f "$OVERRIDE")
 
+# Static guard: the override must actually declare the live-only keys.
+# (Catches an empty/stale override before docker is even touched —
+#  verify then fails cleanly instead of paging after a bad recreate.)
+verify_override_keys() {
+  local fail=0
+  grep -q "8093:8093" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no 8093 MCP binding (tailnet live path)" >&2; fail=1; }
+  grep -q "VAULT_WRITEBACK" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no VAULT_WRITEBACK (2026-10-03 outage mode)" >&2; fail=1; }
+  grep -q "/data/repo" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no /data/repo live mount" >&2; fail=1; }
+  grep -q "/data/code-stage" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no /data/code-stage live mount" >&2; fail=1; }
+  [[ "$fail" -eq 0 ]]
+}
+
 usage() {
   echo "usage: ./up.sh {up|recreate|build|verify} [service...] [extra compose args]" >&2
   echo "  up        compose up -d (default when services given: up -d --no-deps)" >&2
@@ -74,6 +90,8 @@ wait_healthy() {
 
 verify() {
   local fail=0
+  # Static override check first: fails cleanly with no docker needed.
+  verify_override_keys || fail=1
   echo "--- verify: vectorizer-mcp ports (expect 127.0.0.1:8093 AND 100.90.123.105:8093) ---"
   docker port vectorizer-mcp || fail=1
   docker port vectorizer-mcp 2>/dev/null | grep -q "100.90.123.105:8093" \
@@ -89,11 +107,11 @@ verify() {
   docker inspect vectorizer --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^VAULT_WRITEBACK=true$' \
     || { echo "VERIFY-FAIL: VAULT_WRITEBACK=true missing on vectorizer" >&2; fail=1; }
   echo "--- verify: on-host REST health ---"
-  curl -s -m 10 http://127.0.0.1:8091/api/v1/health | head -c 400; echo
+  curl -s -m 10 http://127.0.0.1:8091/api/v1/health | head -c 400 || true; echo
   echo "--- verify: tailnet MCP health (fleet path, 60s retry for post-recreate start) ---"
   local i
   for i in 1 2 3 4 5 6; do
-    curl -s -m 10 http://100.90.123.105:8093/health && { mcp_ok=1; break; }
+    curl -s -m 10 http://100.90.123.105:8093/health && { mcp_ok=1; break; } || true
     sleep 10
   done
   [[ "${mcp_ok:-0}" -eq 1 ]] || { echo "VERIFY-FAIL: tailnet MCP /health unreachable after 60s" >&2; fail=1; }
