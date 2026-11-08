@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # vectorizer-offhost-sync.sh — off-host copy of the nightly vectorizer backup (t_d7130e95).
 # Target (per decision t_df104a39): office Synology NAS via restic-over-ssh
-#   repo: /volume1/backups/ns539881/vectorizer/ (adapt if DSM volume differs; record actual)
+#   repo: <offhost-restic-repo>  (record the actual repo in the private runbook)
 # Runs as ROOT via a narrow sudoers rule (it reads root-owned 0600 credentials).
 # Called by vectorizer-backup-daily.sh AFTER local artifacts are written + verified:
-#   sudo -n /opt/vectorizer/ops-cron/vectorizer-offhost-sync.sh <YYYY-MM-DD>
+#   sudo -n <server-app-dir>/ops-cron/vectorizer-offhost-sync.sh <YYYY-MM-DD>
 #
 # Behaviour:
 #   - repo/creds not provisioned yet -> log SKIP, exit 0 (nightly stays green; the
@@ -14,11 +14,11 @@
 #   - any failure after provisioning -> non-zero exit (daily job fires
 #     VectorizerBackupFailed). Never prints secrets: the repo password is passed
 #     by file reference only and this script runs with tracing off.
-# Out of scope (never included): /opt/vectorizer/vault-data (11 GB).
+# Out of scope (never included): <server-data-dir> (11 GB).
 set -uo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
-BK=/home/ubuntu/backups/vectorizer
+BK="${BACKUP_ROOT:-$HOME/backups}/vectorizer"
 ENV_FILE=/root/.restic/vectorizer-offhost.env   # root-owned 0600, sets RESTIC_REPOSITORY (+ optional RESTIC_PASSWORD_FILE override)
 PASS_FILE=/root/.restic/vectorizer-repo-pass   # root-owned 0600, the restic repo password
 SYNC_LOG=/var/log/vectorizer/vectorizer-backup-sync.log

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # vectorizer-backup-daily.sh — nightly backup of the vectorizer ChromaDB data + config.
-# Installed as:  0 3 * * *  (03:00 host time, host TZ = UTC) in ubuntu's crontab on ns539881.
+# Installed as:  0 3 * * *  (03:00 host time, host TZ = UTC) in the prod host crontab.
 # Log: /var/log/vectorizer/vectorizer-backup-daily.log  (cron appends stdout/stderr)
 #
-# What a backup consists of (all under /home/ubuntu/backups/vectorizer/, 700, 7-day retention):
+# What a backup consists of (all under ${BACKUP_ROOT:-$HOME/backups}/vectorizer/, 700, 7-day retention):
 #   chroma-volume-<date>.tar.gz      the WHOLE chroma_data docker volume — segment .bin
 #                                    files hold the actual embedding vectors (sqlite does
 #                                    NOT), so this is the only complete copy of the data
@@ -17,12 +17,14 @@
 # Step 5b (t_d7130e95): off-host sync via vectorizer-offhost-sync.sh (restic-over-ssh
 # to the office Synology) runs inside this same 03:00 slot after step 5 — no second
 # schedule. Until the repo is provisioned it logs SKIP and stays green.
-# Restore: see /opt/vectorizer/ops-cron/README.md.
+# Restore: see ops-cron/README.md (live values in the private runbook).
 set -uo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
-OPS=/opt/vectorizer/ops-cron
-BK=/home/ubuntu/backups/vectorizer
+# Self-locating: no hardcoded server checkout path in the repo.
+OPS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(dirname "$OPS")"
+BK="${BACKUP_ROOT:-$HOME/backups}/vectorizer"
 STATE=$HOME/.local/state/vectorizer-ops
 VOL=vectorizer_chroma_data
 DATE=$(date +%F)
@@ -107,9 +109,9 @@ log "gz ok: $GZ size=$(stat -c%s "$GZ")"
 # --- 4. config bundle -------------------------------------------------------------
 CFG_FILES=""
 for f in .env docker-compose.yml docker-compose.server.yml docker-compose.override.yml up.sh; do
-  [ -e "/opt/vectorizer/$f" ] && CFG_FILES="$CFG_FILES $f"
+  [ -e "$APP_DIR/$f" ] && CFG_FILES="$CFG_FILES $f"
 done
-( cd /opt/vectorizer && tar czf "$BK/vectorizer-config-$DATE.tar.gz" $CFG_FILES ) \
+( cd "$APP_DIR" && tar czf "$BK/vectorizer-config-$DATE.tar.gz" $CFG_FILES ) \
   || fail "config bundle failed"
 chmod 600 "$BK/vectorizer-config-$DATE.tar.gz"
 log "config ok: vectorizer-config-$DATE.tar.gz size=$(stat -c%s "$BK/vectorizer-config-$DATE.tar.gz")"

@@ -86,6 +86,9 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	if req.WorkspaceID == "" || req.SessionID == "" || req.Role == "" || req.Content == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id, session_id, role, and content are required"})
 	}
+	if !requireWorkspace(c, req.WorkspaceID) {
+		return nil
+	}
 	// Strict peer JWT: if JWT has p, enforce peer_id matches (except admin)
 	if claims, ok := c.Locals("jwt").(*security.Claims); ok && claims != nil && claims.Peer != "" && !claims.Admin {
 		if req.PeerID != "" && req.PeerID != claims.Peer {
@@ -99,7 +102,7 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	}
 	req.Content = models.SanitizeString(req.Content)
 
-	if req.Role != "user" && req.Role != "assistant" && req.Role != "system" {
+	if !models.IsValidRole(req.Role) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "role must be 'user', 'assistant', or 'system'",
 		})
@@ -116,6 +119,9 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 		}
 		for k, v := range req.Metadata {
 			msg.Metadata[k] = v
+		}
+		if err := models.ValidateMetadata(msg.Metadata); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid metadata: " + err.Error()})
 		}
 	}
 	if len(msg.Content) > 100000 {
@@ -190,6 +196,10 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 		if msg.SessionID == "" || msg.Role == "" || msg.Content == "" {
 			continue
 		}
+		if !models.IsValidRole(msg.Role) {
+			results = append(results, fiber.Map{"session_id": msg.SessionID, "stored": false, "error": "role must be 'user', 'assistant', or 'system'"})
+			continue
+		}
 		if len(msg.Content) > 100000 {
 			results = append(results, fiber.Map{"session_id": msg.SessionID, "stored": false, "error": "content too large"})
 			continue
@@ -204,6 +214,15 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 				"role":       msg.Role,
 				"stored":     false,
 				"error":      "workspace_id is required",
+			})
+			continue
+		}
+		if !jwtClaims(c).Allows(wsID) {
+			results = append(results, fiber.Map{
+				"session_id": msg.SessionID,
+				"role":       msg.Role,
+				"stored":     false,
+				"error":      "workspace mismatch",
 			})
 			continue
 		}
@@ -227,6 +246,10 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 					continue
 				}
 				m.Metadata[k] = v
+			}
+			if err := models.ValidateMetadata(m.Metadata); err != nil {
+				results = append(results, fiber.Map{"session_id": sessionID, "stored": false, "error": "invalid metadata: " + err.Error()})
+				continue
 			}
 		}
 		if err := h.store.AddMessage(m, msg.Content); err != nil {
@@ -307,6 +330,11 @@ func (h *MessagesHandler) SearchMessages(c *fiber.Ctx) error {
 	if v, ok := req.Where["hybrid"].(bool); ok {
 		hybrid = v
 	}
+	// F2: the workspace arrives in the JSON body, which the middleware
+	// never sees — enforce the JWT claim here.
+	if !requireWorkspace(c, wID) {
+		return nil
+	}
 	var results []models.SearchResult
 	var err2 error
 	if hybrid {
@@ -344,6 +372,11 @@ func (h *MessagesHandler) SearchMessagesSimple(c *fiber.Ctx) error {
 		nResults = 10
 	}
 
+	// F2: workspace arrives via query string — enforce the JWT claim here.
+	if !requireWorkspace(c, workspaceID) {
+		return nil
+	}
+
 	var results2 []models.SearchResult
 	var err3 error
 	if c.Query("hybrid") == "true" {
@@ -377,6 +410,10 @@ func (h *MessagesHandler) ListMessages(c *fiber.Ctx) error {
 	wsID := c.Query("workspace_id")
 	if wsID == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id is required"})
+	}
+	// F2: workspace arrives via query string — enforce the JWT claim here.
+	if !requireWorkspace(c, wsID) {
+		return nil
 	}
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
@@ -433,6 +470,11 @@ func (h *MessagesHandler) SearchAllWorkspaces(c *fiber.Ctx) error {
 	workspaces, err := h.store.ListWorkspaces()
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list workspaces"})
+	}
+	// F2: this route fans out across workspaces. A scoped non-admin token
+	// is restricted to its own workspace; only admins search everything.
+	if claims := jwtClaims(c); claims != nil && !claims.Admin && claims.Workspace != "" {
+		workspaces = []string{claims.Workspace}
 	}
 
 	// Hybrid defaults ON (MCP bridge sends hybrid:true); explicit false opts out.
@@ -546,6 +588,11 @@ func (h *MessagesHandler) DeleteMessage(c *fiber.Ctx) error {
 	if ws == "" {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
 	}
+	// F2: :id is a message ID, not a workspace — the middleware skips it,
+	// so enforce the resolved owning workspace here.
+	if !requireWorkspace(c, ws) {
+		return nil
+	}
 	n, err := h.store.DeleteMessage(ws, messageID)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to delete message"})
@@ -600,6 +647,11 @@ func (h *MessagesHandler) UpdateMessageContent(c *fiber.Ctx) error {
 	// queued) and replayed automatically through the write-first store
 	// paths when the probe returns ok. EmbeddingHealth() is the cached
 	// background-probe result - no network I/O on the request path.
+	// F2: enforce the caller-supplied workspace hint before queueing; the
+	// resolved owning workspace is enforced again in each branch below.
+	if req.WorkspaceID != "" && !requireWorkspace(c, req.WorkspaceID) {
+		return nil
+	}
 	if hp := store.EmbeddingHealth(); hp.Status != "ok" {
 		queued, qerr := h.enqueuePendingUpdate(c, messageID, req.Content, req.Sections, req.WorkspaceID, req.SessionID, req.Role, req.Metadata, hp.Status, hp.LastErr)
 		if qerr != nil {
@@ -622,6 +674,9 @@ func (h *MessagesHandler) UpdateMessageContent(c *fiber.Ctx) error {
 		if ws == "" {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
 		}
+		if !requireWorkspace(c, ws) {
+			return nil
+		}
 		res, err := h.store.UpdateMessageSections(ws, messageID, req.Sections, req.Metadata)
 		if err != nil {
 			if err.Error() == "message not found" {
@@ -641,6 +696,10 @@ func (h *MessagesHandler) UpdateMessageContent(c *fiber.Ctx) error {
 	ws := h.resolveMessageWorkspace(req.WorkspaceID, messageID)
 	if ws == "" {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
+	}
+	// F2: enforce the resolved owning workspace for scoped tokens.
+	if !requireWorkspace(c, ws) {
+		return nil
 	}
 	// Recover original role/session from surviving chunks when not supplied.
 	role, sessionID := req.Role, req.SessionID
@@ -685,6 +744,11 @@ func (h *MessagesHandler) GetMessageByID(c *fiber.Ctx) error {
 	ws := h.resolveMessageWorkspace(c.Query("workspace_id"), messageID)
 	if ws == "" {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found in any workspace"})
+	}
+	// F2: :id is a message ID, not a workspace — the middleware skips it,
+	// so enforce the resolved owning workspace here.
+	if !requireWorkspace(c, ws) {
+		return nil
 	}
 	docs, err := h.store.GetMessageChunks(ws, messageID)
 	if err != nil {

@@ -1,22 +1,22 @@
-# Vectorizer prod → LM Studio brain path (ns539881 → alfirusdesktop)
+# Vectorizer prod → LM Studio brain path (<prod-host> → <llm-host>)
 
 Status: canonical since 2026-09-29 00:5x MYT (kanban `t_8da84258`, owner aisyah).
 Read this before touching `LM_STUDIO_URL`, `OAI_COMPATIBLE_URL`, `LLM_MODEL`, the
-LM Studio bind on alfirusdesktop, or any `tailscale serve` line.
+LM Studio bind on <llm-host>, or any `tailscale serve` line.
 
 ## The path
 
 ```
-ns539881  /opt/vectorizer (Go, live deploys ONLY via ./up.sh — see up.sh header)
-            LM_STUDIO_URL      = http://100.121.188.113:1234/v1   (LLM brain)
-            OAI_COMPATIBLE_URL = http://100.121.188.113:1234/v1   (embeddings —
+<prod-host>  <server-app-dir> (Go, live deploys ONLY via ./up.sh — see up.sh header)
+            LM_STUDIO_URL      = http://<tailnet-llm-host>:1234/v1   (LLM brain)
+            OAI_COMPATIBLE_URL = http://<tailnet-llm-host>:1234/v1   (embeddings —
                                   config.Config.EmbedBaseURL(), i.e. THIS forward
                                   also carries every embed call, not just chat)
-                  │  100.121.188.113 = Tailscale IP of alfirusdesktop (tailnet only)
+                  │  <tailnet-llm-host> = Tailscale IP of <llm-host> (tailnet only)
                   ▼
-alfirusdesktop   tailscale serve forward (the canonical fix, see Decision 1)
+<llm-host>   tailscale serve forward (the canonical fix, see Decision 1)
                  tailscale serve --bg --tcp=1234 tcp://127.0.0.1:1234
-                 listeners: 100.121.188.113:1234 + [fd7a:…]:1234, tailnet only
+                 listeners: <tailnet-llm-host>:1234 + [<tailnet-ipv6>]:1234, tailnet only
                   ▼
                  127.0.0.1:1234  LM Studio (loopback bind)
 ```
@@ -25,26 +25,26 @@ alfirusdesktop   tailscale serve forward (the canonical fix, see Decision 1)
 
 Exactly one mechanism must be true at a time; the one that is true is the forward.
 Do not "fix" reachability by binding LM Studio to `0.0.0.0:1234` — if you ever do,
-you must also run `tailscale serve --tcp=1234 off` on alfirusdesktop, and expect the
+you must also run `tailscale serve --tcp=1234 off` on <llm-host>, and expect the
 bind to be silently reverted by the next LM Studio restart.
 
 Why the forward wins (measured, not assumed):
 
 - LM Studio's bind reverts to `127.0.0.1:1234` on every server restart — observed
   2026-09-27 01:41 MYT (lms-cli restart) and 2026-09-27 04:25 MYT (D8 restart).
-- Symptom when the bind reverts and the forward is absent: from ns539881,
-  `curl http://100.121.188.113:1234/...` hangs 30 s (no RST);
+- Symptom when the bind reverts and the forward is absent: from <prod-host>,
+  `curl http://<tailnet-llm-host>:1234/...` hangs 30 s (no RST);
   `POST /api/v1/brain/summarize` → `{"error":"failed to summarize"}` after ~96 s;
   `GET /api/v1/health` → `embedding: degraded (embed call exceeded 8s)`.
   Both are one root cause (reachability), not a code defect.
 - The forward is independent of that bind, is tailnet-only (narrower than the old
   LAN-wide `0.0.0.0:1234`), and is re-applied automatically by the watchdog below.
 - Remove it only with an explicit decision recorded here:
-  `tailscale serve --tcp=1234 off` (run on alfirusdesktop).
+  `tailscale serve --tcp=1234 off` (run on <llm-host>).
 
 ## Decision 2 — model residency: prod's model stays resident, PINNED (no TTL)
 
-- Prod's model = `LLM_MODEL` in `/opt/vectorizer/.env` **and** in
+- Prod's model = `LLM_MODEL` in `<server-app-dir>/.env` **and** in
   `docker-compose.server.yml` (both must match — the compose value wins for the
   container). Container log line confirms what is actually wired:
   `LLM Brain: ENABLED (lm-studio, model: …)`.
@@ -53,11 +53,11 @@ Why the forward wins (measured, not assumed):
   `{"error":"Model is unloaded."}` in ~14 s. There is no auto-load on demand, so a
   resident model is the only thing standing between prod and a failed summarize.
 - **`jitModelTTL` is enabled (3600 s)** in `~/.lmstudio/settings.json` on
-  alfirusdesktop: anything loaded *with* `--ttl` (or by an auto/TTL load) idle-evicts
+  <llm-host>: anything loaded *with* `--ttl` (or by an auto/TTL load) idle-evicts
   1 h after its last use — `lms ps --json` shows `ttlMs: 3600000`.
 - **Pinned = loaded explicitly with NO `--ttl`** → `lms ps --json` shows
   `ttlMs: null` → never idle-evicts (the embedding model is `ttlMs: null` too).
-- Re-pin manually (on alfirusdesktop, only while the model is idle — an unload
+- Re-pin manually (on <llm-host>, only while the model is idle — an unload
   kills an in-flight generation):
 
   ```bash
@@ -68,7 +68,7 @@ Why the forward wins (measured, not assumed):
   `lms load` on an already-loaded identifier just errors
   `A model with identifier … already exists` — you must unload first.
 
-## Self-heal watchdog (alfirusdesktop)
+## Self-heal watchdog (<llm-host>)
 
 - Hermes cron job `5195ec0a5a8a`, every 5 min, `no_agent` (script only):
   `C:\Users\alfir\AppData\Local\hermes\profiles\aisyah\scripts\vectorizer-brain-watchdog.sh`
@@ -82,18 +82,18 @@ Why the forward wins (measured, not assumed):
 - Silent when healthy; prints exactly one line per state change (fix / anomaly /
   recovery) and delivers it to the connected gateway channels.
 
-## Verify (from ns539881)
+## Verify (from <prod-host>)
 
 ```bash
 curl -s http://127.0.0.1:8091/api/v1/health        # -> "status":"ok", "embedding":"ok"
 
-K=$(grep -m1 '^DEFAULT_API_KEY=' /opt/vectorizer/.env | cut -d= -f2- | tr -d '\r')
+K=$(grep -m1 '^DEFAULT_API_KEY=' <server-app-dir>/.env | cut -d= -f2- | tr -d '\r')
 curl -s -X POST http://127.0.0.1:8091/api/v1/brain/summarize \
   -H 'Content-Type: application/json' -H "X-API-Key: $K" \
   -d '{"text":"summarize this","max_chars":400}'   # -> {"summary":"…"} non-empty
 
 # reachability of the brain path itself (401 without a token == reachable, not a hang)
-curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://100.121.188.113:1234/v1/models
+curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://<tailnet-llm-host>:1234/v1/models
 ```
 
 `/api/v1/brain/summarize` requires `text` (or `workspace_id`/`session_id`) plus the
@@ -113,8 +113,8 @@ curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://100.121.188.113:1234/v1/mod
 
 `LLM_MODEL` was `qwen3.8-27b@q3_k_xl` when card `t_8da84258` was written. The
 `.env` was edited 2026-09-27 15:37 MYT and both `.env` and `docker-compose.server.yml`
-now say `qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive`; the qwen3.8 weights are no
-longer on alfirusdesktop (`lms ls` → 5 models, none qwen3.8 — only stale default-config
+now say `<llm-model>`; the qwen3.8 weights are no
+longer on <llm-host> (`lms ls` → 5 models, none qwen3.8 — only stale default-config
 JSONs under `~/.lmstudio/.internal/user-concrete-model-default-config/`). This runbook
 makes the **current** model durable; whether prod should be repointed (and the weights
 re-downloaded) is a separate product/model decision, tracked outside this file.

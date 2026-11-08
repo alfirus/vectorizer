@@ -18,7 +18,7 @@ type Claims struct {
 // GenerateToken mints a JWT for local dev/testing. Compatible: use scripts/generate_jwt.py analogue.
 func GenerateToken(secret, workspace, peer string, admin bool, expires time.Duration) (string, error) {
 	claims := Claims{Workspace: workspace, Peer: peer, Admin: admin}
-	if expires > 0 {
+	if expires != 0 {
 		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(expires))
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

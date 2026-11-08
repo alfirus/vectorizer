@@ -14,10 +14,10 @@ jwt_secret = ""   # set AUTH_JWT_SECRET or here
 api_key = ""      # DEFAULT_API_KEY
 
 [embedding]
-provider = "openai-compatible"   # lm-studio | openai-compatible (Qwen3 via vLLM)
-model = "Qwen/Qwen3-Embedding-4B"  # 1536d via MRL,  parity (fallback: nomic-embed-text 768d)
-dimensions = 1536
-url = "http://localhost:8001/v1"  # vLLM TEI; LM Studio fallback http://localhost:1234/v1
+provider = "openai-compatible"   # lm-studio | openai-compatible (Qwen via vLLM)
+model = "text-embedding-nomic-embed-text-v2"  # 768d canonical default (opt-in: Qwen/Qwen3-Embedding-4B at 1536d via MRL)
+dimensions = 768
+url = "http://localhost:1234/v1"  # LM Studio default; vLLM TEI opt-in http://localhost:8001/v1
 
 [llm]
 enabled = false

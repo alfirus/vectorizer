@@ -11,7 +11,7 @@ import (
 	"github.com/alfirus/vectorizer/internal/httpx"
 )
 
-// Service handles text-to-embedding conversion via external providers (Qwen3 1536d MRL).
+// Service handles text-to-embedding conversion via external providers (768d Nomic default, 1536d Qwen opt-in).
 type Service struct {
 	baseURL    string
 	apiKey     string

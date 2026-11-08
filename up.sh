@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 #
-# up.sh — THE canonical live entry point for the vectorizer stack (ns539881).
+# up.sh — THE canonical live entry point for the vectorizer stack (<prod-host>).
+#
+# Live values (tailnet IP, checkout paths) come from the PRIVATE .env /
+# environment — never hardcoded here, so this file is safe to commit.
+# Required for verify: TAILNET_MCP_IP (tailnet IP of the prod host),
+# APP_DIR (server checkout path), STAGE_DIR (code-stage path).
 #
 #   ./up.sh up [args...]        build+start (passes args to `compose up -d`)
 #   ./up.sh recreate <svc...>   force-recreate services (picks up .env changes)
@@ -13,8 +18,8 @@
 # WHY: any explicit `-f` disables compose's auto-load of docker-compose.override.yml.
 # A bare `-f docker-compose.server.yml` recreate SILENTLY drops the untracked
 # live-only override, which carries:
-#   - vectorizer-mcp tailnet binding 100.90.123.105:8093 (fleet's ONLY remote MCP path)
-#   - vectorizer mounts /opt/vectorizer->/data/repo:ro + /opt/code-stage->/data/code-stage:ro
+#   - vectorizer-mcp tailnet binding <tailnet-server-ip>:8093 (fleet's ONLY remote MCP path)
+#   - vectorizer mounts <server-app-dir>->/data/repo:ro + <server-stage-dir>->/data/code-stage:ro
 #   - VAULT_WRITEBACK=true
 # That exact mistake caused the fleet-wide Vectorizer memory outage on 2026-10-03
 # 03:44 UTC. NEVER recreate with a bare -f set — always go through this script.
@@ -24,6 +29,20 @@
 #
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# Live values live in the private .env (untracked) — source it for verify.
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+# Fail LOUD when live values are missing: verify must never silently
+# check the wrong IP/paths.
+TAILNET_MCP_IP="${TAILNET_MCP_IP:?set TAILNET_MCP_IP in the private .env (tailnet IP of the prod host)}"
+APP_DIR="${APP_DIR:?set APP_DIR in the private .env (server checkout path)}"
+STAGE_DIR="${STAGE_DIR:?set STAGE_DIR in the private .env (code-stage path)}"
 
 BASE="docker-compose.server.yml"
 OVERRIDE="docker-compose.override.yml"
@@ -40,6 +59,22 @@ if [[ ! -f "$OVERRIDE" ]]; then
 fi
 
 COMPOSE=(docker compose -f "$BASE" -f "$OVERRIDE")
+
+# Static guard: the override must actually declare the live-only keys.
+# (Catches an empty/stale override before docker is even touched —
+#  verify then fails cleanly instead of paging after a bad recreate.)
+verify_override_keys() {
+  local fail=0
+  grep -q "8093:8093" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no 8093 MCP binding (tailnet live path)" >&2; fail=1; }
+  grep -q "VAULT_WRITEBACK" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no VAULT_WRITEBACK (2026-10-03 outage mode)" >&2; fail=1; }
+  grep -q "/data/repo" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no /data/repo live mount" >&2; fail=1; }
+  grep -q "/data/code-stage" "$OVERRIDE" \
+    || { echo "VERIFY-FAIL: $OVERRIDE declares no /data/code-stage live mount" >&2; fail=1; }
+  [[ "$fail" -eq 0 ]]
+}
 
 usage() {
   echo "usage: ./up.sh {up|recreate|build|verify} [service...] [extra compose args]" >&2
@@ -74,13 +109,15 @@ wait_healthy() {
 
 verify() {
   local fail=0
-  echo "--- verify: vectorizer-mcp ports (expect 127.0.0.1:8093 AND 100.90.123.105:8093) ---"
+  # Static override check first: fails cleanly with no docker needed.
+  verify_override_keys || fail=1
+  echo "--- verify: vectorizer-mcp ports (expect 127.0.0.1:8093 AND ${TAILNET_MCP_IP}:8093) ---"
   docker port vectorizer-mcp || fail=1
-  docker port vectorizer-mcp 2>/dev/null | grep -q "100.90.123.105:8093" \
-    || { echo "VERIFY-FAIL: tailnet 100.90.123.105:8093 binding missing on vectorizer-mcp" >&2; fail=1; }
+  docker port vectorizer-mcp 2>/dev/null | grep -q "${TAILNET_MCP_IP}:8093" \
+    || { echo "VERIFY-FAIL: tailnet ${TAILNET_MCP_IP}:8093 binding missing on vectorizer-mcp" >&2; fail=1; }
   echo "--- verify: vectorizer mounts (expect vault-data, code-stage, repo) ---"
   docker inspect vectorizer --format '{{range .Mounts}}{{.Source}} -> {{.Destination}} ({{.Mode}}){{println}}{{end}}' || fail=1
-  for want in "/opt/vectorizer/vault-data -> /data/ai" "/opt/code-stage -> /data/code-stage" "/opt/vectorizer -> /data/repo"; do
+  for want in "${APP_DIR}/vault-data -> /data/ai" "${STAGE_DIR} -> /data/code-stage" "${APP_DIR} -> /data/repo"; do
     docker inspect vectorizer --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' 2>/dev/null | grep -qF "$want" \
       || { echo "VERIFY-FAIL: mount missing: $want" >&2; fail=1; }
   done
@@ -89,11 +126,11 @@ verify() {
   docker inspect vectorizer --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^VAULT_WRITEBACK=true$' \
     || { echo "VERIFY-FAIL: VAULT_WRITEBACK=true missing on vectorizer" >&2; fail=1; }
   echo "--- verify: on-host REST health ---"
-  curl -s -m 10 http://127.0.0.1:8091/api/v1/health | head -c 400; echo
+  curl -s -m 10 http://127.0.0.1:8091/api/v1/health | head -c 400 || true; echo
   echo "--- verify: tailnet MCP health (fleet path, 60s retry for post-recreate start) ---"
   local i
   for i in 1 2 3 4 5 6; do
-    curl -s -m 10 http://100.90.123.105:8093/health && { mcp_ok=1; break; }
+    curl -s -m 10 "http://${TAILNET_MCP_IP}:8093/health" && { mcp_ok=1; break; } || true
     sleep 10
   done
   [[ "${mcp_ok:-0}" -eq 1 ]] || { echo "VERIFY-FAIL: tailnet MCP /health unreachable after 60s" >&2; fail=1; }

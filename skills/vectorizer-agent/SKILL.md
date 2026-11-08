@@ -4,7 +4,7 @@ description: Provision an agent's Vectorizer memory skill + personal workspace (
 ---
 # Vectorizer Agent Provisioning
 
-Give every agent a personal semantic-memory skill backed by its own Vectorizer workspace. Provisioned agents recall/record through the live server (`http://100.90.123.105:8091/api/v1`) instead of losing context every session.
+Give every agent a personal semantic-memory skill backed by its own Vectorizer workspace. Provisioned agents recall/record through the live server (`http://<tailnet-server-ip>:8091/api/v1`) instead of losing context every session.
 
 ## Conventions (enforced)
 
@@ -29,7 +29,7 @@ Give every agent a personal semantic-memory skill backed by its own Vectorizer w
 3. **MCP bridge:** wire the shared MCP bridge into the agent's Hermes config so `vectorizer_*` tools load in every session:
 
    ```
-   hermes -p <agent> config set mcp_servers.vectorizer.url http://100.90.123.105:8093/mcp
+   hermes -p <agent> config set mcp_servers.vectorizer.url http://<tailnet-server-ip>:8093/mcp
    hermes -p <agent> config set mcp_servers.vectorizer.headers.Authorization "Bearer <MCP_BEARER_TOKEN>"
    hermes -p <agent> config set mcp_servers.vectorizer.headers.X-Agent <agent>
    hermes -p <agent> config set mcp_servers.vectorizer.timeout 180
@@ -41,10 +41,10 @@ Give every agent a personal semantic-memory skill backed by its own Vectorizer w
 4. **Verify:** the skill file exists, the workspace is listed, and a store→search round-trip works with `X-Agent: <name>`:
 
    ```
-   curl -s -X POST http://100.90.123.105:8091/api/v1/messages \
+   curl -s -X POST http://<tailnet-server-ip>:8091/api/v1/messages \
      -H "X-API-Key: YOUR_VECTORIZER_API_KEY" -H "X-Agent: <name>" -H "Content-Type: application/json" \
      -d '{"workspace_id":"<agent>","session_id":"provision-check","role":"system","content":"provision check","metadata":{"importance":1}}'
-   curl -s -X POST http://100.90.123.105:8091/api/v1/messages/search \
+   curl -s -X POST http://<tailnet-server-ip>:8091/api/v1/messages/search \
      -H "X-API-Key: YOUR_VECTORIZER_API_KEY" -H "X-Agent: <name>" -H "Content-Type: application/json" \
      -d '{"query":"provision check","n_results":1,"where":{"workspace_id":"<agent>"}}'
    ```

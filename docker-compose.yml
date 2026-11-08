@@ -4,15 +4,17 @@ services:
     container_name: vectorizer
     ports:
       - "127.0.0.1:${PORT:-8091}:${PORT:-8091}"
-      - "${GRPC_PORT:-50051}:${GRPC_PORT:-50051}"
+      - "127.0.0.1:${GRPC_PORT:-50051}:${GRPC_PORT:-50051}"
     env_file:
       - .env
     environment:
       CHROMA_HOST: chromadb
       CHROMA_PORT: 8000
+      # Canonical embedding default: 768d Nomic (P0-1). Set EMBED_* in .env
+      # for the 1536d Qwen opt-in (see docker-compose.server.yml).
       EMBED_PROVIDER: ${EMBED_PROVIDER:-openai-compatible}
-      EMBED_MODEL: ${EMBED_MODEL:-Qwen/Qwen3-Embedding-4B-GGUF}
-      EMBED_DIMENSIONS: ${EMBED_DIMENSIONS:-1536}
+      EMBED_MODEL: ${EMBED_MODEL:-text-embedding-nomic-embed-text-v2}
+      EMBED_DIMENSIONS: ${EMBED_DIMENSIONS:-768}
       OAI_COMPATIBLE_URL: ${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}
       OAI_API_KEY: ${OAI_API_KEY:-${LM_STUDIO_API_KEY:-}}
       LM_STUDIO_URL: ${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
@@ -28,7 +30,8 @@ services:
       TTL_HOURS: ${TTL_HOURS:-0}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     volumes:
-      - "C:/Users/alfir/SynologyDrive/ai:/data/ai:ro"
+      # Local vault mirror: set AI_DATA_DIR in .env (never commit the path).
+      - "${AI_DATA_DIR:?set AI_DATA_DIR in .env (local vault mirror)}:/data/ai:ro"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -36,7 +39,7 @@ services:
         condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8091}/api/v1/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -55,7 +58,8 @@ services:
       --dtype auto
       --enforce-eager
     ports:
-      - "${QWEN_PORT:-8001}:8000"
+      # P0-3: loopback-only even for the opt-in GPU profile.
+      - "127.0.0.1:${QWEN_PORT:-8001}:8000"
     volumes:
       - qwen_cache:/root/.cache/huggingface
     environment:
@@ -90,7 +94,9 @@ services:
     build: ../vectorizer-dashboard
     container_name: vectorizer-dashboard
     ports:
-      - "8092:8092"
+      # P0-3: loopback-only. The dashboard is server-local; expose it
+      # remotely only via SSH tunnel or the tailnet override.
+      - "127.0.0.1:8092:8092"
     env_file:
       - .env
     environment:
@@ -99,11 +105,12 @@ services:
       CHROMA_URL: http://chromadb:8000
       LM_STUDIO_URL: ${LM_STUDIO_URL:-${OAI_COMPATIBLE_URL:-http://host.docker.internal:1234/v1}}
       LM_STUDIO_KEY: ${LM_STUDIO_API_KEY:-${OAI_API_KEY:-}}
-      LLM_MODEL: ${LLM_MODEL:-qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive}
-      GRAPH_PATH: /data/ai/maisarah/vault/00-index/GRAPH.json
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
+      GRAPH_PATH: ${GRAPH_PATH:-/data/ai/vault/00-index/GRAPH.json}
       VAULT_ROOT: /data/ai
     volumes:
-      - "C:/Users/alfir/SynologyDrive/ai:/data/ai:ro"
+      # Local vault mirror: set AI_DATA_DIR in .env (never commit the path).
+      - "${AI_DATA_DIR:?set AI_DATA_DIR in .env (local vault mirror)}:/data/ai:ro"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -117,6 +124,24 @@ services:
       retries: 3
       start_period: 15s
 
+  # Nightly Chroma backup (profile-gated, runs once and exits).
+  # Method A (HTTP API) only: set CHROMA_URL to the in-network address.
+  # Run manually:  docker compose --profile backup run --rm backup
+  # Cron (host):   0 3 * * * cd /opt/vectorizer && docker compose --profile backup run --rm backup >> /var/log/vectorizer-backup.log 2>&1
+  backup:
+    image: python:3.12-alpine
+    profiles: ["backup"]
+    volumes:
+      - ./vectorizer_backup.py:/scripts/vectorizer_backup.py:ro
+      - backup_data:/backups
+    environment:
+      VECTORIZER_BACKUP_DIR: /backups
+      VECTORIZER_BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      CHROMA_URL: http://chromadb:8000
+      CHROMA_CONTAINER: vectorizer-chromadb
+    command: ["python3", "/scripts/vectorizer_backup.py"]
+
 volumes:
   chroma_data:
   qwen_cache:
+  backup_data:

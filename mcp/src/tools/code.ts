@@ -4,7 +4,7 @@ import type { Client } from "../config.js";
 import { json, err } from "../types.js";
 
 export function registerCodeTools(server: McpServer, getClient: () => Client) {
-  server.tool("vectorizer_index_repo", "Index a SERVER-LOCAL repo path into a code_<repo> workspace: per-symbol chunks + DEFINES/CALLS/IMPORTS reasoning edges. Unchanged files skipped by hash. Path must exist on the Vectorizer server (e.g. /opt/vectorizer), not the agent's laptop.", {
+  server.tool("vectorizer_index_repo", "Index a SERVER-LOCAL repo path into a code_<repo> workspace: per-symbol chunks + DEFINES/CALLS/IMPORTS reasoning edges. Unchanged files skipped by hash. Path must exist on the Vectorizer server (e.g. /data/repo/<name>), not the agent's laptop.", {
     path: z.string().min(1), workspace_id: z.string().optional(), session_id: z.string().optional(),
   }, async (a) => {
     try { const data = await getClient().req("/api/v1/code/index", { method: "POST", body: JSON.stringify(a) }); return json(data); } catch (e) { return err(e); }

@@ -2,8 +2,14 @@
 """Vectorizer ChromaDB Backup - Lightweight version for slow Docker."""
 import datetime, glob, os, subprocess, sys, tarfile, tempfile, urllib.request, json, gzip
 
-BACKUP_DIR = r"C:\Users\alfir\SynologyDrive\ai\backups\vectorizer"
-KEEP_DAYS = 7
+# Laptop default: ~/vectorizer-backups. Override with VECTORIZER_BACKUP_DIR.
+# (Operator-local absolute paths are scrubbed — P0-4; use env for live paths.)
+BACKUP_DIR = os.environ.get("VECTORIZER_BACKUP_DIR") or os.path.join(
+    os.path.expanduser("~"), "vectorizer-backups"
+)
+KEEP_DAYS = int(os.getenv("VECTORIZER_BACKUP_KEEP_DAYS", "7"))
+CHROMA_URL = os.getenv("CHROMA_URL", "http://localhost:8100").rstrip("/")
+CHROMA_CONTAINER = os.getenv("CHROMA_CONTAINER", "vectorizer-chromadb")
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
 log = lambda msg: print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
@@ -20,7 +26,7 @@ success = False
 # Method A: ChromaDB HTTP API (fastest, no docker needed)
 try:
     log("Method A: ChromaDB HTTP API...")
-    req = urllib.request.Request("http://localhost:8100/api/v2/collections", method="GET")
+    req = urllib.request.Request(CHROMA_URL + "/api/v2/collections", method="GET")
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read())
     
@@ -31,7 +37,7 @@ try:
     for coll_name in collections:
         try:
             req2 = urllib.request.Request(
-                f"http://localhost:8100/api/v2/collections/{coll_name}", method="GET"
+                CHROMA_URL + f"/api/v2/collections/{coll_name}", method="GET"
             )
             with urllib.request.urlopen(req2, timeout=15) as resp2:
                 backup_data["collections"].append(json.loads(resp2.read()))
@@ -54,7 +60,7 @@ if not success:
     try:
         log("Method B: docker cp...")
         with tempfile.TemporaryDirectory() as tmpdir:
-            cmd = ["docker", "cp", "vectorizer-chromadb:/data/.", tmpdir]
+            cmd = ["docker", "cp", CHROMA_CONTAINER + ":/data/.", tmpdir]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             
             if result.returncode == 0 and os.listdir(tmpdir):
@@ -75,12 +81,12 @@ if not success:
 if not success:
     try:
         log("Method C: docker exec tar...")
-        cmd = "docker exec vectorizer-chromadb tar -czf /tmp/backup.tar.gz -C /data ."
+        cmd = "docker exec " + CHROMA_CONTAINER + " tar -czf /tmp/backup.tar.gz -C /data ."
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=180)
         
         if result.returncode == 0:
             # Download the file
-            cmd2 = "docker cp vectorizer-chromadb:/tmp/backup.tar.gz " + backup_path
+            cmd2 = "docker cp " + CHROMA_CONTAINER + ":/tmp/backup.tar.gz " + backup_path
             result2 = subprocess.run(cmd2, shell=True, capture_output=True, text=True, timeout=60)
             
             if result2.returncode == 0 and os.path.exists(backup_path):

@@ -24,7 +24,7 @@ Now with **markdown vault + file-graph + workflow librarian** — truth is markd
 - **Provenance + hygiene** — `GET /conclusions/trace` (why-believe forward / blast-radius reverse, BFS ≤10), `GET /conclusions/stale` (dead-knowledge proposals: old, never-referenced, non-timeless — nothing auto-deleted), `GET /conclusions/brief` (one-shot session-start overview: stats + representation + recent + top entities)
 - **Section splice updates** — `PUT /messages/:id {sections: {"Heading": "new body"}}` rewrites only named `##` sections, re-embeds only changed chunks, stable message ID (trace edges survive); `noop:true` on identical retry
 - **Identifier-aware BM25** — `LexTokens` splits `camelCase/snake_case/kebab/digit` boundaries (`RAG_MIN_SCORE→rag|min|score`, `GetMessageChunks→get|message|chunks`) while keeping `utf8/phi4/4B`-style tokens glued — code-heavy vault notes actually searchable
-- **Codebase indexing mode** — `POST /code/index {path}` walks a server-local repo (skip dirs + `.gitignore`, 500KB cap, per-file sha hash-skip) into a `code_<repo>` workspace: per-symbol chunks + DEFINES/CALLS/IMPORTS reasoning edges → `GET /code/symbols` + `GET /code/callers?symbol=X` ("what calls X" without grep); mount repo read-only in compose (`/opt/vectorizer:/data/repo:ro`)
+- **Codebase indexing mode** — `POST /code/index {path}` walks a server-local repo (skip dirs + `.gitignore`, 500KB cap, per-file sha hash-skip) into a `code_<repo>` workspace: per-symbol chunks + DEFINES/CALLS/IMPORTS reasoning edges → `GET /code/symbols` + `GET /code/callers?symbol=X` ("what calls X" without grep); mount repo read-only in compose (`<server-app-dir>:/data/repo:ro`)
 - **Conclusions + representations + surprisal dreamer** — offline `summarize→embed 768d→ws_<id>_conclusions` every `3h` with surprisal gate (`distance <0.15` skip)
 - **Optional LLM brain** — SSE streaming, auto-fetch, summarization & RAG Q&A via `/chat/completions` with **10-minute timeout** (for large models like Qwen3.6-35B-A3B) — reserved for Deriver/Dreamer/Chat synthesis, not tagging; requires LM Studio API token
 - **Embedder interface** — pluggable `embedding.Embedder` abstraction; swap providers without changing callers
@@ -42,10 +42,10 @@ Agent → Vectorizer API → ChromaDB (vectors) + Embedding Service
   ├─ POST /messages       ├─ text-embedding-nomic-embed-text-v2 768d (local, primary)
   ├─ GET  /search         ├─ Qwen/Qwen3-Embedding-4B 1536d MRL (vLLM, optional)
   └─ POST /brain/ask      ├─ text-embedding-004 / 005 (Google, 768d)
-                          └─ qwen3.6-35b-a3b (LM Studio, LLM brain — 10min timeout)
+                          └─ <llm-model> (LM Studio, LLM brain — 10min timeout)
 
-Vault pipeline:
-  SynologyDrive/ai/*.md → vault_index.py (markdown-aware chunker 3600-4800+200, header_path, never inside ```)
+Vault pipeline (paths are examples — real roots live in private `.env`):
+  <vault-mirror>/ai/*.md → vault_index.py (markdown-aware chunker 3600-3800, header_path, never inside ```)
                         → tags/entities via workflow (keyword + known list [Maisarah,Alfirus,Bukku,DJI...])
                         → POST /messages/batch {metadata: 11 fields + entities}
                         → Chroma ws_family 768d cosine + GRAPH.json (chunk→doc→entity→folder)
@@ -68,11 +68,13 @@ docker compose up -d
 
 # Verify it's running (should show embedding_model nomic-embed-text-v2 768d, space cosine)
 curl http://localhost:8091/api/v1/health
-# {"chromadb":"ok","embedding_model":"text-embedding-nomic-embed-text-v2","llm_enabled":true,"status":"ok","version":"0.3.0"}
+# {"chromadb":"ok","embedding_model":"text-embedding-nomic-embed-text-v2","llm_enabled":true,"status":"ok","version":"0.4.0"}
 
 # Populate vault (markdown truth → vector index)
-python vault/00-index/vault_index.py
-python vault/00-index/graph_build.py  # optional: rebuild GRAPH.json
+python scripts/vault_index.py --workspace <name>   # e.g. --workspace family
+python scripts/graph_build.py --workspace <name>   # optional: rebuild GRAPH.json
+# (vault/00-index/ is the index dir inside your vault data at
+#  <VAULT_ROOT>/<workspace>/vault/00-index/, not a repo path — see scripts/README.md)
 
 # Search with lineage
 curl -H "X-API-Key: YOUR_VECTORIZER_API_KEY" -H "Content-Type: application/json" \
@@ -91,12 +93,12 @@ make build && ./vectorizer.exe
 
 ### Option C: Server Deployment (Live)
 
-Runs on `ns539881` (`139.99.131.127`, Tailscale `100.90.123.105`). SSH as `ubuntu` (never root) with key `~/.ssh/personal`.
+Runs on `<prod-host>` (`<prod-server-ip>`, Tailscale `<tailnet-server-ip>`). SSH as `ubuntu` (never root) with key `~/.ssh/personal`.
 
 ```bash
-# On server (139.99.131.127)
-git clone https://github.com/alfirus/vectorizer.git /opt/vectorizer
-cd /opt/vectorizer
+# On server (<prod-server-ip>)
+git clone https://github.com/alfirus/vectorizer.git <server-app-dir>
+cd <server-app-dir>
 
 # Create .env with Tailscale LM Studio URL and API token
 cat > .env << 'EOF'
@@ -107,18 +109,18 @@ CHROMA_PORT=8000
 EMBED_PROVIDER=openai-compatible
 EMBED_MODEL=text-embedding-nomic-embed-text-v2
 EMBED_DIMENSIONS=768
-LM_STUDIO_URL=http://100.121.188.113:1234/v1
+LM_STUDIO_URL=http://<tailnet-llm-host>:1234/v1
 LM_STUDIO_API_KEY=[REDACTED]
-OAI_COMPATIBLE_URL=http://100.121.188.113:1234/v1
+OAI_COMPATIBLE_URL=http://<tailnet-llm-host>:1234/v1
 LLM_ENABLED=true
 LLM_PROVIDER=lm-studio
-LLM_MODEL=qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive
+LLM_MODEL=<llm-model>
 LLM_API_KEY=[REDACTED]
 RAG_MAX_DISTANCE=0.78
 RAG_MIN_SCORE=0.22
 LIBRARIAN_MODE=workflow
 VAULT_ROOT=/data/ai
-ALERT_EMAIL_TO=alfirus@gmail.com
+ALERT_EMAIL_TO=<operator-email>
 EOF
 
 # Start everything (Vectorizer :8091 + ChromaDB 127.0.0.1:8102 + Dashboard 127.0.0.1:8092)
@@ -128,7 +130,7 @@ EOF
 ./up.sh up
 
 # Verify (vectorizer is the only public port; dashboard/chroma are server-local)
-curl http://100.90.123.105:8091/api/v1/health
+curl http://<tailnet-server-ip>:8091/api/v1/health
 # {"status":"ok","chromadb":"ok","embedding_model":"text-embedding-nomic-embed-text-v2",...}
 
 # Import vault data
@@ -200,7 +202,7 @@ docker compose up -d  # Vectorizer :8091 + ChromaDB :8100 + Dashboard :8092
 
 ### Server (Production)
 
-Uses `docker-compose.server.yml` with Tailscale mesh for LM Studio. Vectorizer binds to `0.0.0.0:8091` for Tailscale access from the desktop:
+Uses `docker-compose.server.yml` with Tailscale mesh for LM Studio. The server file binds Vectorizer/gRPC to loopback; remote access rides the untracked `docker-compose.override.yml` tailnet binding (see `./up.sh verify`):
 
 ```yaml
 services:
@@ -208,8 +210,8 @@ services:
     build: .
     container_name: vectorizer
     ports:
-      - "0.0.0.0:8091:8091"       # Tailscale access from desktop
-      - "127.0.0.1:50051:50051"   # gRPC (local only)
+      - "127.0.0.1:8091:8091"     # REST (loopback; tailnet via override)
+      - "127.0.0.1:50051:50051"   # gRPC (loopback only)
     env_file: .env
     environment:
       CHROMA_HOST: chromadb
@@ -217,12 +219,12 @@ services:
       EMBED_PROVIDER: openai-compatible
       EMBED_MODEL: text-embedding-nomic-embed-text-v2
       EMBED_DIMENSIONS: 768
-      LM_STUDIO_URL: http://100.121.188.113:1234/v1
+      LM_STUDIO_URL: ${LM_STUDIO_URL:?set in private .env}
       LIBRARIAN_MODE: workflow
       VAULT_ROOT: /data/ai
     volumes:
-      - /opt/vectorizer/vault-data:/data/ai  # writable for MEMORY_INDEX.json
-      - /opt/vectorizer:/data/repo:ro  # read-only repo mount for POST /code/index
+      - ${VAULT_DATA_DIR:?set in private .env}:/data/ai  # writable for MEMORY_INDEX.json
+      - ${APP_DIR:?set in private .env}:/data/repo:ro  # read-only repo mount for POST /code/index
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -254,10 +256,10 @@ services:
       VECTORIZER_URL: http://vectorizer:8091   # NO /api/v1 — code appends it
       VECTORIZER_API_KEY: YOUR_VECTORIZER_API_KEY
       LM_STUDIO_KEY: ${LM_STUDIO_API_KEY}
-      LLM_MODEL: qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive
+      LLM_MODEL: <llm-model>
       VAULT_ROOT: /data/ai
     volumes:
-      - /opt/vectorizer/vault-data:/data/ai  # writable for graph_build.py
+      - <server-app-dir>/vault-data:/data/ai  # writable for graph_build.py
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -297,11 +299,11 @@ server {
 ./up.sh recreate vectorizer
 ```
 
-**⚠️ Vault permissions:** Files inside `/opt/vectorizer/vault-data/` must be writable by the container (uid 1001 `nextjs`). If you see `PermissionError: [Errno 13] Permission denied` on `MEMORY_INDEX.json`:
+**⚠️ Vault permissions:** Files inside `<server-app-dir>/vault-data/` must be writable by the container (uid 1001 `nextjs`). If you see `PermissionError: [Errno 13] Permission denied` on `MEMORY_INDEX.json`:
 
 ```bash
-chmod 666 /opt/vectorizer/vault-data/maisarah/vault/00-index/*.json
-chmod 777 /opt/vectorizer/vault-data/maisarah/vault/00-index/
+chmod 666 <server-app-dir>/vault-data/maisarah/vault/00-index/*.json
+chmod 777 <server-app-dir>/vault-data/maisarah/vault/00-index/
 ```
 
 **⚠️ Dashboard PORT leak:** If dashboard service inherits Vectorizer's `.env` with `PORT=8091`, dashboard will conflict. Always set `PORT: 8092` explicitly in the dashboard service environment.
@@ -310,12 +312,12 @@ chmod 777 /opt/vectorizer/vault-data/maisarah/vault/00-index/
 
 | Job | Schedule | Where | What |
 |-----|----------|-------|------|
-| `vectorizer-backup-daily` | `0 3 * * *` (03:00) | Hermes `origin` | `vectorizer_backup.py` → SSH `docker exec` tar of live `/data` in chromadb container → `SynologyDrive/ai/backups/vectorizer/chroma-YYYY-MM-DD.tar.gz` + per-workspace `MEMORY_INDEX.<ws>` snapshots, prune `+7d` |
+| `vectorizer-backup-daily` | `0 3 * * *` (03:00) | Hermes `origin` | `vectorizer_backup.py` → SSH `docker exec` tar of live `/data` in chromadb container → `<vault-backup-dir>/vectorizer/chroma-YYYY-MM-DD.tar.gz` + per-workspace `MEMORY_INDEX.<ws>` snapshots, prune `+7d` (real dir in private `.env` `VECTORIZER_BACKUP_DIR`) |
 | `vectorizer-health-1h` | `0 * * * *` (hourly) | Hermes `origin` | `vectorizer_healthcheck.py` probes `:8091/health` over Tailscale + `:8092/` and `:8102/heartbeat` via SSH; auto-heal = SSH `docker compose restart`, email alert |
 | `deriver` | `2s/5msg` ticker | Inside `vectorizer` | `Summarize("Extract 1-3 facts" + text[:8000]) → CreateConclusion + AddReasoningEdge` on `POST /messages` |
 | `dreamer` | `3h` ticker | Inside `vectorizer` | `ListWorkspaces→ListSessions→GetMessages(20)` surprisal `<0.15` skip → `CreateConclusion(source:dreamer)` |
 
-> Laptop `localhost:8091` is dead — nothing runs locally. Both Hermes scripts reach the server over Tailscale (`100.90.123.105`, SSH `ubuntu` + `~/.ssh/personal`).
+> Laptop `localhost:8091` is dead — nothing runs locally. Both Hermes scripts reach the server over Tailscale (`<tailnet-server-ip>`, SSH `ubuntu` + `~/.ssh/personal`).
 
 ## Configuration
 
@@ -326,7 +328,9 @@ All settings via `.env` file or environment variables. Key options:
 | `PORT` | `8091` | Server port |
 | `CHROMA_HOST` | `localhost` | ChromaDB hostname |
 | `CHROMA_PORT` | `8100` | ChromaDB port |
-| `DEFAULT_API_KEY` | *(empty)* | API key for auth (set to enable) |
+| `DEFAULT_API_KEY` | *(empty)* | API key for auth. Empty + no JWT = server REFUSES to start unless `VECTORIZER_ALLOW_OPEN=true` (fail-closed) |
+| `VECTORIZER_ALLOW_OPEN` | `false` | Local-dev escape hatch: `true` starts with NO auth + loud warning + `"auth":"open"` in `/health`. Never set on a reachable host |
+| `GRPC_BIND` | `127.0.0.1` | gRPC listen address (REST parity: gRPC requires the same API key/JWT) |
 | `REQUIRE_X_AGENT` | `false` | Compulsory agent identity: usage-tracked calls without `X-Agent` get `400` (see Agent Attribution) |
 | `EMBED_PROVIDER` | `openai-compatible` | Embedding provider: `google`, `openai-compatible`, `lm-studio` |
 | `LM_STUDIO_URL` | `http://host.docker.internal:1234/v1` | LM Studio endpoint |
@@ -336,7 +340,7 @@ All settings via `.env` file or environment variables. Key options:
 | `EMBED_DIMENSIONS` | `768` | Embedding dimensions — 768 (nomic) or 1536 (Qwen3) |
 | `LLM_ENABLED` | `false` | Enable LLM brain (Deriver/Dreamer/Chat synthesis) |
 | `LLM_PROVIDER` | `lm-studio` | LLM provider: `lm-studio` or `openai-compatible` |
-| `LLM_MODEL` | `qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive` | LLM model for brain |
+| `LLM_MODEL` | `qwen3:8b` | Default LLM model for brain (compose default; live value lives in private `.env`, never commit) |
 | `LLM_API_KEY` | *(empty)* | LM Studio API token (same as `LM_STUDIO_API_KEY`) |
 | `LIBRARIAN_MODE` | `workflow` | Librarian: `workflow` (code tagging+rerank <10ms, default) or `hybrid` (workflow + AI 1.5s cap) |
 | `VAULT_WRITEBACK` | `false` | Mirror stored turns to per-session staging markdown after vector+meta succeed (`10-memory/sessions/<session>.md`, frontmatter `generated_by: vectorizer`, `status: staging`). Async (2s/20-msg batch), idempotent on `message_id`, degrades silently on read-only mount. Enable on server only (`VAULT_WRITEBACK=true` in `.env`); local `:ro` mount keeps it safe. |
@@ -344,7 +348,8 @@ All settings via `.env` file or environment variables. Key options:
 | `RAG_MAX_DISTANCE` | `0.78` | Relevance floor — hits with cosine distance above this are dropped |
 | `RAG_MIN_SCORE` | `0.22` | Same gate as absolute score (`1 − distance`); either knob tunes recall vs precision |
 | `VAULT_ROOT` | `/data/ai` | Vault mount inside Docker |
-| `ALERT_EMAIL_TO` | *(empty)* | Health-alert recipient (used by `vectorizer_healthcheck.py`, default `alfirus@gmail.com`) |
+| `CODE_INDEX_ROOT` | `/data/ai,/data/repo` | Allowlist for `POST /code/index` (F5 jail: outside roots → 403, escaping symlinks skipped) |
+| `ALERT_EMAIL_TO` | *(empty)* | Health-alert recipient (used by `vectorizer_healthcheck.py`, default `<operator-email>`) |
 
 ## API Reference
 
@@ -682,7 +687,9 @@ vectorizer/
 ├── skills/           # Skills
 ├── sdks/             # TS + Python SDKs
 ├── evals/            # Eval harness
-├── scripts/          # Vault indexer, backup, healthcheck, migration
+├── scripts/          # Vault indexer (vault_index.py, graph_build.py) + migration
+├── vectorizer_backup.py      # Backup automation (repo root)
+├── vectorizer_healthcheck.py # Health monitoring (repo root)
 ├── main.go           # Entry point
 ├── Dockerfile        # Container build
 ├── docker-compose.yml       # Full stack (local)
@@ -693,4 +700,4 @@ vectorizer/
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

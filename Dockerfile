@@ -26,6 +26,6 @@ COPY --from=builder /app/vectorizer .
 EXPOSE 8091 50051
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:8091/api/v1/health || exit 1
+  CMD wget -qO- http://localhost:${PORT:-8091}/api/v1/health || exit 1
 
 CMD ["./vectorizer"]

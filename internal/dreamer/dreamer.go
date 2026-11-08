@@ -2,18 +2,20 @@ package dreamer
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alfirus/vectorizer/internal/llmbrain"
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
-// Dreamer periodically summarizes recent session context and stores as conclusions (1536d, surprisal).
+// Dreamer periodically summarizes recent session context and stores as conclusions (embedder dims, surprisal).
 type Dreamer struct {
 	store *store.Store
 	brain *llmbrain.Service
 	interval time.Duration
 	stop chan struct{}
+	stopOnce sync.Once
 }
 
 func New(s *store.Store, brain *llmbrain.Service, interval time.Duration) *Dreamer {
@@ -34,7 +36,7 @@ func (d *Dreamer) Start() {
 		}
 	}()
 }
-func (d *Dreamer) Stop(){ close(d.stop) }
+func (d *Dreamer) Stop(){ d.stopOnce.Do(func(){ close(d.stop) }) }
 
 func (d *Dreamer) RunOnce(){ d.runOnce() }
 

@@ -93,7 +93,7 @@ def main():
     ap.add_argument("--template", default=DEFAULT_TEMPLATE)
     ap.add_argument("--ensure-workspace", action="store_true",
                     help="create the Vectorizer workspace if missing and verify it")
-    ap.add_argument("--api-base", default="http://100.90.123.105:8091/api/v1")
+    ap.add_argument("--api-base", default="http://<tailnet-server-ip>:8091/api/v1")
     ap.add_argument("--api-key",
                     default=os.environ.get("VECTORIZER_API_KEY") or os.environ.get("DEFAULT_API_KEY") or "",
                     help="Vectorizer REST X-API-Key (falls back to VECTORIZER_API_KEY / DEFAULT_API_KEY env)")

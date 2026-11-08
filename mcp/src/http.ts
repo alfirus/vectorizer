@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// http entry — hosted use (Docker on ns539881).
+// http entry — hosted use (Docker on the prod host).
 // StreamableHTTP + bearer token. Listens on 127.0.0.1 by default;
 // reach it via Tailscale (never expose publicly).
 //

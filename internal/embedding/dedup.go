@@ -75,6 +75,11 @@ func embedConcurrency() int {
 	return 4
 }
 
+// Unwrap exposes the inner Embedder without the concurrency Gate.
+// The background embedding-health probe uses this so a wedged probe can
+// never hold one of the 4 shared Gate slots and throttle real traffic (F14).
+func (g *Gate) Unwrap() Embedder { return g.inner }
+
 // Gate wraps an Embedder with a semaphore cap on in-flight calls.
 type Gate struct {
 	inner Embedder

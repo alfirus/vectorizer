@@ -23,8 +23,32 @@ func NewChatHandler(s *store.Store, b *llmbrain.Service) *ChatHandler { return &
 
 // POST /workspaces/:workspace_id/chat - dialectic agentic chat (peer chat, tool loop)
 func (h *ChatHandler) Chat(c *fiber.Ctx) error {
+	payload, status := h.doChat(c)
+	return c.Status(status).JSON(payload)
+}
+
+// GET /workspaces/:workspace_id/chat/stream - same agentic answer as Chat,
+// framed as valid SSE: one `data:` event with the JSON payload followed by
+// `data: [DONE]`. (F11: previously this set an SSE content type but wrote a
+// single JSON blob, which SSE clients cannot parse as a stream.)
+func (h *ChatHandler) ChatStream(c *fiber.Ctx) error {
+	payload, status := h.doChat(c)
+	body, _ := json.Marshal(payload)
+	c.Set("Content-Type", "text/event-stream")
+	c.Set("Cache-Control", "no-cache")
+	c.Set("Connection", "keep-alive")
+	c.Set("X-Accel-Buffering", "no")
+	if status >= 400 {
+		return c.Status(status).SendString("event: error\ndata: " + string(body) + "\n\n")
+	}
+	return c.Status(status).SendString("data: " + string(body) + "\n\ndata: [DONE]\n\n")
+}
+
+// doChat runs the shared agentic loop and returns the JSON payload plus HTTP
+// status, leaving framing (plain JSON vs SSE) to the caller.
+func (h *ChatHandler) doChat(c *fiber.Ctx) (fiber.Map, int) {
 	if h.brain == nil {
-		return c.Status(503).JSON(fiber.Map{"error": "LLM brain not enabled"})
+		return fiber.Map{"error": "LLM brain not enabled"}, 503
 	}
 	ws := c.Params("workspace_id")
 	var req struct {
@@ -35,13 +59,13 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 		ReasoningLevel string `json:"reasoning_level"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "invalid body"})
+		return fiber.Map{"error": "invalid body"}, 400
 	}
-	if req.Query == "" { return c.Status(400).JSON(fiber.Map{"error": "query required"})}
+	if req.Query == "" { return fiber.Map{"error": "query required"}, 400 }
 	// Strict peer JWT: observer must match JWT p if present
 	if claims, ok := c.Locals("jwt").(*security.Claims); ok && claims != nil && claims.Peer != "" && !claims.Admin {
 		if req.Observer != "" && req.Observer != claims.Peer {
-			return c.Status(403).JSON(fiber.Map{"error": "observer mismatch with JWT"})
+			return fiber.Map{"error": "observer mismatch with JWT"}, 403
 		}
 		if req.Observer == "" { req.Observer = claims.Peer }
 	}
@@ -89,7 +113,7 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 	for iter := 0; iter <= maxTools; iter++ {
 		resp, err := h.brain.ChatWithHistory(messages, temperature)
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "chat failed: "+err.Error()})
+			return fiber.Map{"error": "chat failed: " + err.Error()}, 500
 		}
 		toolName, toolArgs := parseToolCall(resp)
 		if toolName == "" || iter == maxTools {
@@ -131,7 +155,7 @@ func (h *ChatHandler) Chat(c *fiber.Ctx) error {
 		msg := models.NewMessage(ws, req.SessionID, "assistant", answer)
 		_ = h.store.AddMessage(msg, answer)
 	}
-	return c.JSON(fiber.Map{"answer": answer, "observer": observer, "observed": observed})
+	return fiber.Map{"answer": answer, "observer": observer, "observed": observed}, 200
 }
 
 // minRelevantScore is the shared relevance floor (score = 1 - distance,
@@ -238,9 +262,4 @@ func (h *ChatHandler) execTool(ws, sessionID, tool string, args map[string]inter
 	default:
 		return "unknown tool"
 	}
-}
-
-func (h *ChatHandler) ChatStream(c *fiber.Ctx) error {
-	c.Set("Content-Type", "text/event-stream")
-	return h.Chat(c)
 }

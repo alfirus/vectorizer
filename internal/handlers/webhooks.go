@@ -10,12 +10,24 @@ func NewWebhooksHandler(m *webhooks.Manager) *WebhooksHandler { return &Webhooks
 
 func (h *WebhooksHandler) Register(c *fiber.Ctx) error {
 	var req struct{ WorkspaceID string `json:"workspace_id"`; URL string `json:"url"`; Events []string `json:"events"`}
-	if err:=c.BodyParser(&req); err!=nil { return c.Status(400).JSON(fiber.Map{"error":"invalid body"})}
-	if req.WorkspaceID=="" || req.URL=="" { return c.Status(400).JSON(fiber.Map{"error":"workspace_id and url required"})}
-	h.m.Register(req.WorkspaceID, req.URL, req.Events)
-	return c.JSON(fiber.Map{"registered":true})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid body"})
+	}
+	if req.WorkspaceID == "" || req.URL == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "workspace_id and url required"})
+	}
+	if !requireWorkspace(c, req.WorkspaceID) {
+		return nil
+	}
+	if err := h.m.Register(req.WorkspaceID, req.URL, req.Events); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"registered": true})
 }
 func (h *WebhooksHandler) List(c *fiber.Ctx) error {
-	ws:=c.Query("workspace_id")
+	ws := c.Query("workspace_id")
+	if !requireWorkspace(c, ws) {
+		return nil
+	}
 	return c.JSON(fiber.Map{"endpoints": h.m.List(ws)})
 }

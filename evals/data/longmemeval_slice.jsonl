@@ -1,0 +1,14 @@
+{"workspace_id":"eval-longmem","session_id":"trip-planning","role":"user","content":"We are planning the offsite in Lisbon for the week of 2026-11-16. Priya handles venue booking."}
+{"workspace_id":"eval-longmem","session_id":"trip-planning","role":"user","content":"Flight rule from finance: book at least 21 days ahead, otherwise get written approval."}
+{"workspace_id":"eval-longmem","session_id":"venue-thread","role":"user","content":"Priya shortlisted two venues: LX Factory Hall (holds 80) and Beato Hub Loft (holds 40)."}
+{"workspace_id":"eval-longmem","session_id":"venue-thread","role":"assistant","content":"Recorded shortlist: LX Factory Hall (80) vs Beato Hub Loft (40)."}
+{"workspace_id":"eval-longmem","session_id":"headcount","role":"user","content":"Confirmed headcount for Lisbon is 65 people, so Beato Hub Loft at 40 is too small."}
+{"workspace_id":"eval-longmem","session_id":"headcount","role":"user","content":"Quentin from security requires badge-gated access for any venue holding 50 or more."}
+{"workspace_id":"eval-longmem","session_id":"policy","role":"user","content":"Travel policy v3 (effective 2026-10-01): offsites over 50 people need a named safety officer."}
+{"workspace_id":"eval-longmem","session_id":"policy","role":"user","content":"Ruth volunteered as safety officer for Lisbon on 2026-10-20."}
+{"workspace_id":"eval-longmem","query":"Which venue fits the 65-person headcount?","expected":"LX Factory"}
+{"workspace_id":"eval-longmem","query":"Who handles venue booking for the Lisbon offsite?","expected":"Priya"}
+{"workspace_id":"eval-longmem","query":"Who volunteered as safety officer, and why is one needed?","expected":"Ruth"}
+{"workspace_id":"eval-longmem","query":"What does the travel policy require for offsites over 50 people?","expected":"safety officer"}
+{"workspace_id":"eval-longmem","query":"What security measure does Quentin require for the venue?","expected":"badge"}
+{"workspace_id":"eval-longmem","query":"Given the headcount and the venue shortlist, which option works and what constraint rules the other out?","expected":"LX Factory"}

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# install.sh — idempotent installer for the vectorizer backup + health cron jobs (ns539881).
+# install.sh — idempotent installer for the vectorizer backup + health cron jobs (<prod-host>).
 # Safe to re-run: it only adds what is missing and never touches existing crontab lines.
 set -euo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
-OPS=/opt/vectorizer/ops-cron
+# Self-locating: the ops dir is wherever this checkout lives (no hardcoded
+# server path — live values stay out of the repo).
+OPS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGDIR=/var/log/vectorizer
-BK=/home/ubuntu/backups/vectorizer
+BK="${BACKUP_ROOT:-$HOME/backups}/vectorizer"
 MARKER="vectorizer-backup-daily"
 
 echo "== log dir =="
@@ -31,12 +33,12 @@ echo "== crontab =="
 if crontab -l 2>/dev/null | grep -q "$MARKER"; then
   echo "cron entries already present:"
 else
-  { crontab -l 2>/dev/null; cat <<'EOF'
+  { crontab -l 2>/dev/null; cat <<EOF
 # >>> vectorizer-ops (t_551df9d9) >>>
 # vectorizer-backup-daily: nightly ChromaDB volume + sqlite snapshot + config bundle, 03:00 UTC
-0 3 * * * /opt/vectorizer/ops-cron/vectorizer-backup-daily.sh >> /var/log/vectorizer/vectorizer-backup-daily.log 2>&1
+0 3 * * * $OPS/vectorizer-backup-daily.sh >> /var/log/vectorizer/vectorizer-backup-daily.log 2>&1
 # vectorizer-health-1h: hourly stack probe + backup freshness watchdog, alerts via alertmanager
-0 * * * * /opt/vectorizer/ops-cron/vectorizer-health-1h.sh >> /var/log/vectorizer/vectorizer-health-1h.log 2>&1
+0 * * * * $OPS/vectorizer-health-1h.sh >> /var/log/vectorizer/vectorizer-health-1h.log 2>&1
 # <<< vectorizer-ops (t_551df9d9) <<<
 EOF
   } | crontab -

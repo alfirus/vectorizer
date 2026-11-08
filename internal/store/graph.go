@@ -137,11 +137,20 @@ func (g *Graph) Expand(ids []string, hops int, maxNeighbors int) []string {
 	return expanded
 }
 
-// GraphPathFromEnv returns vault graph path from VAULT_ROOT env or default.
+// GraphPathFromEnv returns vault graph path from GRAPH_PATH, else from
+// VAULT_ROOT, else a portable home-directory default (P0-4: no
+// operator-local absolute path in the repo).
 func GraphPathFromEnv() string {
+	if v := os.Getenv("GRAPH_PATH"); v != "" {
+		return v
+	}
 	if v := os.Getenv("VAULT_ROOT"); v != "" {
 		return filepath.Join(v, "maisarah", "vault", "00-index", "GRAPH.json")
 	}
-	// Windows default
-	return `C:/Users/alfir/SynologyDrive/ai/maisarah/vault/00-index/GRAPH.json`
+	// Portable default — override with GRAPH_PATH in real deployments.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join("vault", "00-index", "GRAPH.json")
+	}
+	return filepath.Join(home, "vault", "00-index", "GRAPH.json")
 }

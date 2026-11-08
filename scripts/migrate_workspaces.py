@@ -8,8 +8,11 @@ import subprocess
 
 LOCAL_URL = "http://localhost:8091/api/v1"
 API_KEY = os.environ.get("VECTORIZER_API_KEY") or os.environ.get("DEFAULT_API_KEY") or ""
-SSH_KEY = "C:/Users/alfir/.ssh/personal"
-SERVER = "ubuntu@139.99.131.127"
+SSH_KEY = os.environ.get("VECTORIZER_SSH_KEY") or os.path.join(
+    os.path.expanduser("~"), ".ssh", "personal"
+)
+# Live server login lives outside the repo (private runbook / env).
+SERVER = os.environ.get("VECTORIZER_SSH_TARGET") or "ubuntu@<prod-server-ip>"
 
 def api_get(url, path):
     req = urllib.request.Request(f"{url}{path}", headers={"X-API-Key": API_KEY})

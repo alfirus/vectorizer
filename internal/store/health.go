@@ -124,9 +124,16 @@ func StartEmbeddingProbe(embed embedding.Embedder) (stop func()) {
 
 // probeOnce performs exactly one bounded embed call and reports the outcome.
 // Pure with respect to package state — unit-testable.
+//
+// The probe deliberately bypasses the shared Gate semaphore (via Unwrap):
+// a wedged probe must never hold one of the 4 global embed slots and
+// throttle real traffic (F14).
 func probeOnce(embed embedding.Embedder, timeout time.Duration) EmbeddingProbe {
 	if embed == nil {
 		return EmbeddingProbe{Status: "unknown", CheckedAt: time.Now()}
+	}
+	if g, ok := embed.(interface{ Unwrap() embedding.Embedder }); ok {
+		embed = g.Unwrap()
 	}
 	type outcome struct {
 		err error
