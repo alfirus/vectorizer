@@ -39,7 +39,7 @@ services:
         condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8091}/api/v1/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -124,6 +124,24 @@ services:
       retries: 3
       start_period: 15s
 
+  # Nightly Chroma backup (profile-gated, runs once and exits).
+  # Method A (HTTP API) only: set CHROMA_URL to the in-network address.
+  # Run manually:  docker compose --profile backup run --rm backup
+  # Cron (host):   0 3 * * * cd /opt/vectorizer && docker compose --profile backup run --rm backup >> /var/log/vectorizer-backup.log 2>&1
+  backup:
+    image: python:3.12-alpine
+    profiles: ["backup"]
+    volumes:
+      - ./vectorizer_backup.py:/scripts/vectorizer_backup.py:ro
+      - backup_data:/backups
+    environment:
+      VECTORIZER_BACKUP_DIR: /backups
+      VECTORIZER_BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      CHROMA_URL: http://chromadb:8000
+      CHROMA_CONTAINER: vectorizer-chromadb
+    command: ["python3", "/scripts/vectorizer_backup.py"]
+
 volumes:
   chroma_data:
   qwen_cache:
+  backup_data:

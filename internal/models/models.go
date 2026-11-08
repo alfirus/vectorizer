@@ -23,6 +23,17 @@ func checkDepth(m map[string]interface{}, d int) error {
 	for _, v := range m { if mm, ok := v.(map[string]interface{}); ok { if err := checkDepth(mm, d+1); err != nil { return err } } }
 	return nil
 }
+
+// IsValidRole is the single shared allow-list for message roles (F15: the
+// batch path previously accepted any non-empty role, persisting values like
+// "banana" that break role-filtered search assumptions).
+func IsValidRole(role string) bool {
+	switch role {
+	case "user", "assistant", "system":
+		return true
+	}
+	return false
+}
 type validationError struct{ msg string }
 func (e *validationError) Error() string { return e.msg }
 

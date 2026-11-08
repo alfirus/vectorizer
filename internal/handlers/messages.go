@@ -102,7 +102,7 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 	}
 	req.Content = models.SanitizeString(req.Content)
 
-	if req.Role != "user" && req.Role != "assistant" && req.Role != "system" {
+	if !models.IsValidRole(req.Role) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "role must be 'user', 'assistant', or 'system'",
 		})
@@ -119,6 +119,9 @@ func (h *MessagesHandler) AddMessage(c *fiber.Ctx) error {
 		}
 		for k, v := range req.Metadata {
 			msg.Metadata[k] = v
+		}
+		if err := models.ValidateMetadata(msg.Metadata); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid metadata: " + err.Error()})
 		}
 	}
 	if len(msg.Content) > 100000 {
@@ -193,6 +196,10 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 		if msg.SessionID == "" || msg.Role == "" || msg.Content == "" {
 			continue
 		}
+		if !models.IsValidRole(msg.Role) {
+			results = append(results, fiber.Map{"session_id": msg.SessionID, "stored": false, "error": "role must be 'user', 'assistant', or 'system'"})
+			continue
+		}
 		if len(msg.Content) > 100000 {
 			results = append(results, fiber.Map{"session_id": msg.SessionID, "stored": false, "error": "content too large"})
 			continue
@@ -239,6 +246,10 @@ func (h *MessagesHandler) AddBatchMessages(c *fiber.Ctx) error {
 					continue
 				}
 				m.Metadata[k] = v
+			}
+			if err := models.ValidateMetadata(m.Metadata); err != nil {
+				results = append(results, fiber.Map{"session_id": sessionID, "stored": false, "error": "invalid metadata: " + err.Error()})
+				continue
 			}
 		}
 		if err := h.store.AddMessage(m, msg.Content); err != nil {

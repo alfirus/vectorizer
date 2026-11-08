@@ -1,2 +1,13 @@
 {"workspace_id":"eval-ws","session_id":"s1","role":"user","content":"Alice prefers concise bullet points over paragraphs."}
 {"workspace_id":"eval-ws","query":"How does Alice prefer answers formatted?","expected":"bullet"}
+{"workspace_id":"eval-ws","session_id":"s1","role":"assistant","content":"Noted — I will answer Alice with concise bullet points."}
+{"workspace_id":"eval-ws","session_id":"s2","role":"user","content":"Bob's deployment window is Sundays 02:00-04:00 UTC; deploys outside that need his explicit approval."}
+{"workspace_id":"eval-ws","session_id":"s2","role":"user","content":"Carol owns the payments service and wants a ping before any schema migration lands."}
+{"workspace_id":"eval-ws","session_id":"s3","role":"user","content":"The team agreed on 2026-09-14: rollback beats rollforward for the checkout hotfix path."}
+{"workspace_id":"eval-ws","session_id":"s3","role":"assistant","content":"Recorded: checkout hotfix path uses rollback-first, decided 2026-09-14."}
+{"workspace_id":"eval-ws","session_id":"s4","role":"user","content":"Dave is allergic to meetings before 10:00; schedule reviews in the afternoon."}
+{"workspace_id":"eval-ws","session_id":"s4","role":"user","content":"Eve maintains the vectorizer fork; her embed model is text-embedding-nomic-embed-text-v2 at 768 dimensions."}
+{"workspace_id":"eval-ws","query":"When is Bob's deployment window?","expected":"Sunday"}
+{"workspace_id":"eval-ws","query":"Who owns the payments service?","expected":"Carol"}
+{"workspace_id":"eval-ws","query":"For the checkout hotfix path, rollback or rollforward?","expected":"rollback"}
+{"workspace_id":"eval-ws","query":"What embedding model does Eve's fork use?","expected":"nomic"}

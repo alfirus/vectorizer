@@ -2,6 +2,7 @@ package dreamer
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alfirus/vectorizer/internal/llmbrain"
@@ -14,6 +15,7 @@ type Dreamer struct {
 	brain *llmbrain.Service
 	interval time.Duration
 	stop chan struct{}
+	stopOnce sync.Once
 }
 
 func New(s *store.Store, brain *llmbrain.Service, interval time.Duration) *Dreamer {
@@ -34,7 +36,7 @@ func (d *Dreamer) Start() {
 		}
 	}()
 }
-func (d *Dreamer) Stop(){ close(d.stop) }
+func (d *Dreamer) Stop(){ d.stopOnce.Do(func(){ close(d.stop) }) }
 
 func (d *Dreamer) RunOnce(){ d.runOnce() }
 

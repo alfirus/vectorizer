@@ -768,6 +768,14 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] Google AI Studio provider (`internal/embedding/google.go`) — `text-embedding-004`/`005` 768d, batch `batchEmbedContents` + single `embedContent`, `GOOGLE_API_KEY`
 - [x] Config + Docker wiring — `EMBED_PROVIDER=google`, `GOOGLE_API_KEY` env passthrough, Go 1.25 builder image
 
+### Phase 7: Hardening & Adoption — open
+- [ ] Multi-replica / Chroma story — single-node ChromaDB is the wipe-on-recreate footgun (R4); decide: Chroma auth + persistent-volume contract, or a pluggable store interface with a second backend. Document the choice.
+- [ ] TLS by default — ship a Caddy sidecar example (`Caddyfile` + compose profile) so a naive `compose up` is plaintext-free; closes the R3 gap without forcing every operator to hand-roll a reverse proxy.
+- [ ] Dimension-consistency check — refuse or loudly warn on mixed-dim collections (768d vs 1536d, R6); `migrate-768-to-1536.sh` exists but nothing verifies the result. Gate startup or `/health` on it.
+- [ ] Build matrix — `Makefile` builds `vectorizer.exe`; `Dockerfile` builds Linux `vectorizer`; README Option B only works on Windows (M12). Add `GOOS` matrix (`vectorizer` / `vectorizer.exe`) and fix the docs per platform.
+- [ ] Adoption 0→1 star — README badges (build, eval gate), quickstart gif/video, changelog; tag `v0.4.0` and cut the first release so SDK versions have something to track.
+- [ ] Sustaining — keep the eval gate green (`evals/gate.sh`), run the restore drill quarterly (`docs/ops-runbook.md`), grow contract coverage for the remaining zero-test packages (`chromadb`, `codeindex` has some).
+
 ---
 
 *This blueprint is a living document. Update it as the architecture evolves.*

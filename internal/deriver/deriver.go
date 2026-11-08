@@ -1,6 +1,7 @@
 package deriver
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +16,7 @@ type Deriver struct {
 	brain *llmbrain.Service
 	queue chan queued
 	stop  chan struct{}
+	stopOnce sync.Once
 	// drops counts facts silently discarded because the queue was full.
 	// A monotonic counter (no silent loss): surfaced via Drops() and the
 	// /metrics endpoint so a saturated queue pages instead of vanishing.
@@ -57,12 +59,15 @@ func (d *Deriver) Start() {
 			case <-ticker.C:
 				if len(batch)>0 { d.flush(batch); batch=nil }
 			case <-d.stop:
+				if len(batch) > 0 {
+					d.flush(batch)
+				}
 				return
 			}
 		}
 	}()
 }
-func (d *Deriver) Stop(){ close(d.stop) }
+func (d *Deriver) Stop(){ d.stopOnce.Do(func(){ close(d.stop) }) }
 
 func (d *Deriver) flush(batch []queued) {
 	// Group by workspace

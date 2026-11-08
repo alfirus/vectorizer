@@ -14,7 +14,20 @@ import urllib.error
 ENV_FILE = os.environ.get("VECTORIZER_ENV_FILE") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".env"
 )
-ALERT_EMAIL = os.environ.get("ALERT_EMAIL_TO", "ops@example.com")
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL_TO", os.environ.get("ALERT_EMAIL", "ops@example.com"))
+VECTORIZER_URL = os.getenv("VECTORIZER_URL", "http://localhost:8091")
+CHROMA_URL = os.getenv("CHROMA_URL", "http://localhost:8100").rstrip("/")
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://localhost:8094")
+CHROMA_PORT = os.getenv("CHROMA_PORT", "8100")
+VECTORIZER_PORT = os.getenv("VECTORIZER_PORT", "8091")
+DASHBOARD_PORT = os.getenv("DASHBOARD_PORT", "8094")
+COMPOSE_FILE = os.getenv(
+    "COMPOSE_FILE",
+    os.getenv(
+        "VECTORIZER_COMPOSE_FILE",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker-compose.yml"),
+    ),
+)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -52,9 +65,9 @@ def _lm_studio_url():
 
 def _services():
     return [
-        ("vectorizer", "http://localhost:8092/", 200),
-        ("chromadb",   "http://localhost:8100/api/v2/version", 200),
-        ("dashboard",  "http://localhost:8094/", 200),
+        ("vectorizer", VECTORIZER_URL + "/", 200),
+        ("chromadb",   CHROMA_URL + "/api/v2/version", 200),
+        ("dashboard",  DASHBOARD_URL + "/", 200),
         ("lm-studio",  _lm_studio_url(), None),
     ]
 
@@ -106,7 +119,7 @@ def docker_compose_up():
     """Try to start containers via docker-compose."""
     here = os.path.dirname(os.path.abspath(__file__))
     compose_paths = [
-        os.environ.get("VECTORIZER_COMPOSE_FILE", ""),
+        os.environ.get("VECTORIZER_COMPOSE_FILE", "") or COMPOSE_FILE,
         os.path.join(here, "docker-compose.yml"),
         os.path.join(here, "docker-compose.yaml"),
     ]
@@ -139,7 +152,7 @@ def docker_compose_up():
     try:
         result = subprocess.run(
             ["docker", "run", "-d", "--name", "vectorizer-chromadb",
-             "-p", "8100:8000",
+             "-p", CHROMA_PORT + ":8000",
              "-v", "vectorizer_chroma_data:/chroma/chroma",
              "chromadb/chroma:1.0.0"],
             capture_output=True, text=True, timeout=30
@@ -154,7 +167,7 @@ def docker_compose_up():
     # Vectorizer container (internal port 8091, mapped to host 8092)
     try:
         cmd = ["docker", "run", "-d", "--name", "vectorizer-vectorizer",
-               "-p", "8092:8091", "-p", "50051:50051",
+               "-p", VECTORIZER_PORT + ":8091", "-p", "50051:50051",
                "vectorizer-vectorizer:latest"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0 or "already in use" in (result.stderr or ""):
@@ -168,7 +181,7 @@ def docker_compose_up():
     try:
         result = subprocess.run(
             ["docker", "run", "-d", "--name", "vectorizer-dashboard",
-             "-p", "8094:8092",
+             "-p", DASHBOARD_PORT + ":8092",
              "vectorizer-dashboard:latest"],
             capture_output=True, text=True, timeout=30
         )

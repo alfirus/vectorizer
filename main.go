@@ -418,12 +418,15 @@ func main() {
 			N     int    `json:"n_results"`
 		}
 		_ = c.BodyParser(&req)
-		if req.N <= 0 || req.N > 100 {
+		if req.N <= 0 {
 			req.N = 5
+		}
+		if req.N > 100 {
+			req.N = 100
 		}
 		results, err := vecStore.Search(req.Query, c.Params("id"), "", "", req.N)
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "search failed"})
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
 		return c.JSON(fiber.Map{"results": results})
 	})
@@ -642,15 +645,50 @@ type rateLimiter struct {
 	tokens map[string][]time.Time
 	limit  int
 	window time.Duration
+	lastSweep time.Time
 }
 
+// sweepInterval bounds how often Allow* scans the whole map for dead keys.
+const rateLimiterSweepInterval = time.Minute
+
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
-	return &rateLimiter{tokens: make(map[string][]time.Time), limit: limit, window: window}
+	return &rateLimiter{tokens: make(map[string][]time.Time), limit: limit, window: window, lastSweep: time.Now()}
+}
+
+// sweepLocked drops map entries whose timestamps are all expired, so the
+// table cannot grow one entry per distinct key forever (F9). Callers must
+// hold r.mu. Runs at most once per sweepInterval to keep Allow O(1).
+func (r *rateLimiter) sweepLocked(now time.Time) {
+	if now.Sub(r.lastSweep) < rateLimiterSweepInterval {
+		return
+	}
+	r.lastSweep = now
+	cutoff := now.Add(-r.window)
+	for key, times := range r.tokens {
+		alive := false
+		for _, t := range times {
+			if t.After(cutoff) {
+				alive = true
+				break
+			}
+		}
+		if !alive {
+			delete(r.tokens, key)
+		}
+	}
+}
+
+// Size reports the number of tracked keys (for tests/metrics).
+func (r *rateLimiter) Size() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.tokens)
 }
 func (r *rateLimiter) Allow(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
+	r.sweepLocked(now)
 	cutoff := now.Add(-r.window)
 	times := r.tokens[key]
 	filtered := times[:0]
@@ -670,6 +708,7 @@ func (r *rateLimiter) AllowWithLimit(key string, limit int) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
+	r.sweepLocked(now)
 	cutoff := now.Add(-r.window)
 	times := r.tokens[key]
 	filtered := times[:0]

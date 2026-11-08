@@ -1,8 +1,21 @@
 # ADR 0003: Pin 1536d (Qwen3-Embedding-4B MRL) as the canonical embedding dimension
 
-**Status:** Proposed
+**Status:** SUPERSEDED by P0-1 (2026-11-08, publish) — DO NOT IMPLEMENT AS WRITTEN
 **Date:** 2026-11-08
 **Authors:** Lina (Tech Lead, retroactive record of shipped decision)
+
+---
+
+## Supersession notice
+
+This ADR's decision (1536d Qwen as canonical) was **rejected at publish time**
+in favor of the P0-1 reconciliation: **768d Nomic
+(`text-embedding-nomic-embed-text-v2`) is canonical; 1536d Qwen
+(`Qwen/Qwen3-Embedding-4B` MRL) is opt-in** for GPU deployments. The original
+proposal is preserved below for history. A deployment must still pick ONE dim
+— mixing dims in one collection is unsupported. Canonical statement now lives
+in `docs/BLUEPRINT.md` (v0.4.0), `config/config.go`, `.env.example`, and
+`config.toml.example`.
 
 ---
 
