@@ -14,14 +14,14 @@ type Config struct {
 	ChromaPort    int    `env:"CHROMA_PORT"`
 	DefaultAPIKey string `env:"DEFAULT_API_KEY"`
 
-	// Embedding config ( 1536d via Qwen3-Embedding-4B MRL)
+	// Embedding config (768d Nomic primary, 1536d Qwen opt-in — see BLUEPRINT §3)
 	EmbedProvider    string `env:"EMBED_PROVIDER"` // "lm-studio", "openai-compatible", or "google"
 	LmStudioURL      string `env:"LM_STUDIO_URL"`
 	OAICompatibleURL string `env:"OAI_COMPATIBLE_URL"`
 	OAIAPIKey        string `env:"OAI_API_KEY"`
 	GoogleAPIKey     string `env:"GOOGLE_API_KEY"`   // Google AI Studio API key
-	EmbedModel       string `env:"EMBED_MODEL"`      // e.g. "Qwen/Qwen3-Embedding-4B-GGUF" or "text-embedding-004"
-	EmbedDimensions  int    `env:"EMBED_DIMENSIONS"` // 1536 default (MRL), 768 for Google
+	EmbedModel       string `env:"EMBED_MODEL"`      // e.g. "text-embedding-nomic-embed-text-v2" or "Qwen/Qwen3-Embedding-4B-GGUF"
+	EmbedDimensions  int    `env:"EMBED_DIMENSIONS"` // 768 default (Nomic), 1536 opt-in (Qwen MRL)
 
 	// LLM Brain config (optional)
 	LLMEnabled          bool   `env:"LLM_ENABLED"`
@@ -123,8 +123,8 @@ func Load() *Config {
 		OAICompatibleURL: getEnvString("OAI_COMPATIBLE_URL", ""),
 		OAIAPIKey:        os.Getenv("OAI_API_KEY"),
 		GoogleAPIKey:     os.Getenv("GOOGLE_API_KEY"),
-		EmbedModel:       getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "Qwen/Qwen3-Embedding-4B-GGUF"),
-		EmbedDimensions:  getEnvIntWithTOML("EMBED_DIMENSIONS", tcAppInt(tc, func(c *tomlConfig) int { return c.Embedding.Dimensions }), 1536),
+		EmbedModel:       getEnvStringWithTOML("EMBED_MODEL", tcStr(tc, func(c *tomlConfig) string { return c.Embedding.Model }), "text-embedding-nomic-embed-text-v2"),
+		EmbedDimensions:  getEnvIntWithTOML("EMBED_DIMENSIONS", tcAppInt(tc, func(c *tomlConfig) int { return c.Embedding.Dimensions }), 768),
 
 		LLMEnabled:          envBoolWithTOML("LLM_ENABLED", tcBool(tc, func(c *tomlConfig) *bool { return c.LLM.Enabled }), false),
 		LLMProvider:         getEnvStringWithTOML("LLM_PROVIDER", tcStr(tc, func(c *tomlConfig) string { return c.LLM.Provider }), "lm-studio"),

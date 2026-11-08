@@ -192,10 +192,39 @@ func (c *Client) Query(collectionID string, queryEmbeddings [][]float32, nResult
 	}
 
 	var results []QueryResult
-	for i := range result.Ids[0] {
+	// F8: Chroma can return an empty or shape-mismatched payload (error
+	// shapes, partial includes). Indexing result.Ids[0] unchecked panics
+	// the in-flight request, and the client sees a dropped connection
+	// instead of a 500 JSON. Clamp to the shortest present array and
+	// fail loudly on genuine shape mismatch.
+	if len(result.Ids) == 0 || len(result.Ids[0]) == 0 {
+		return nil, nil
+	}
+	n := len(result.Ids[0])
+	parallel := map[string]int{"distances": -1, "documents": -1, "metadatas": -1}
+	if len(result.Distances) > 0 {
+		parallel["distances"] = len(result.Distances[0])
+	}
+	if len(result.Documents) > 0 {
+		parallel["documents"] = len(result.Documents[0])
+	}
+	if len(result.Metadatas) > 0 {
+		parallel["metadatas"] = len(result.Metadatas[0])
+	}
+	for name, l := range parallel {
+		if l == -1 {
+			continue
+		}
+		if l < n {
+			return nil, fmt.Errorf("query collection %s: response shape mismatch (%s has %d rows, ids has %d)", collectionID, name, l, n)
+		}
+	}
+	for i := 0; i < n; i++ {
 		r := QueryResult{
-			ID:       result.Ids[0][i],
-			Distance: result.Distances[0][i],
+			ID: result.Ids[0][i],
+		}
+		if len(result.Distances) > 0 {
+			r.Distance = result.Distances[0][i]
 		}
 		if len(result.Documents) > 0 && len(result.Documents[0]) > i {
 			r.Document = result.Documents[0][i]

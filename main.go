@@ -28,6 +28,7 @@ import (
 	"github.com/alfirus/vectorizer/internal/store"
 	"github.com/alfirus/vectorizer/internal/webhooks"
 	"github.com/alfirus/vectorizer/internal/writeback"
+	"github.com/alfirus/vectorizer/internal/version"
 	pb "github.com/alfirus/vectorizer/vectorizerpb"
 )
 
@@ -36,6 +37,20 @@ func main() {
 	godotenv.Load()
 
 	cfg := config.Load()
+
+	// P0-2 fail-closed auth: refuse to start open on a non-loopback
+	// listener unless the operator explicitly opts into local-dev mode.
+	// (The REST listener always binds all interfaces inside the process;
+	// Docker port-mapping decides what is reachable. An unset key here
+	// means every route — including /code/index and /webhooks — is open.)
+	authConfigured := cfg.DefaultAPIKey != "" || (cfg.AuthUseAuth && cfg.AuthJWTSecret != "")
+	if !authConfigured && os.Getenv("VECTORIZER_ALLOW_OPEN") != "true" {
+		log.Fatalf("refusing to start: no API key or JWT secret configured and VECTORIZER_ALLOW_OPEN != true. " +
+			"Set DEFAULT_API_KEY or AUTH_USE_AUTH=true + AUTH_JWT_SECRET, or export VECTORIZER_ALLOW_OPEN=true for loopback-only local dev")
+	}
+	if !authConfigured {
+		log.Printf("WARNING: starting with NO authentication (VECTORIZER_ALLOW_OPEN=true) — bind loopback only, never expose this port")
+	}
 
 	fmt.Println("═══════════════════════════════════════")
 	fmt.Println("  Vectorizer — Semantic Memory Server")
@@ -62,7 +77,7 @@ func main() {
 		log.Printf("Warning: ChromaDB may not be running at %s:%d", cfg.ChromaHost, cfg.ChromaPort)
 	}
 
-	// Initialize embedding service (Qwen3 1536d MRL via openai-compatible, 1536d)
+	// Initialize embedding service (768d Nomic default, 1536d Qwen opt-in).
 	var embedService embedding.Embedder
 	if cfg.EmbedProvider == "google" && cfg.GoogleAPIKey != "" {
 		embedService = embedding.NewGoogle(cfg.GoogleAPIKey, cfg.EmbedModel, cfg.EmbedDimensions)
@@ -149,7 +164,7 @@ func main() {
 		}
 	}
 
-	// Initialize deriver (deriver, async conclusions, 1536d)
+	// Initialize deriver (deriver, async conclusions)
 	var drv *deriver.Deriver
 	if brain != nil {
 		drv = deriver.New(vecStore, brain)
@@ -252,13 +267,25 @@ func main() {
 				return c.Status(401).JSON(fiber.Map{"error": "invalid token"})
 			}
 			c.Locals("jwt", claims)
-			// Enforce workspace scoping: if claims has w, it must match any workspace param
+			// Enforce workspace scoping: a scoped non-admin claim must match
+			// the workspace carried by the route. Resolution order is
+			// param -> query; JSON-body workspaces are enforced per-handler
+			// (see handlers.requireWorkspace) because the body is not parsed
+			// at middleware time. Non-workspace :id params (message, session,
+			// conclusion, webhook IDs) are NOT compared here — comparing them
+			// 403s every correctly-scoped CRUD call (F2). The only :id that
+			// names a workspace is /workspaces/:id, enforced below.
 			if claims.Workspace != "" && !claims.Admin {
 				if ws := c.Params("workspace_id"); ws != "" && ws != claims.Workspace {
 					return c.Status(403).JSON(fiber.Map{"error": "workspace mismatch"})
 				}
-				if ws := c.Params("id"); ws != "" && !isHealthOrMetrics(c.Path()) && ws != claims.Workspace {
+				if ws := c.Query("workspace_id"); ws != "" && ws != claims.Workspace {
 					return c.Status(403).JSON(fiber.Map{"error": "workspace mismatch"})
+				}
+				if strings.HasPrefix(path, "/api/v1/workspaces/") {
+					if ws := c.Params("id"); ws != "" && ws != claims.Workspace {
+						return c.Status(403).JSON(fiber.Map{"error": "workspace mismatch"})
+					}
 				}
 			}
 			return c.Next()
@@ -335,8 +362,12 @@ func main() {
 		if chromaStatus != "ok" || embed.Status == "degraded" {
 			status = "degraded"
 		}
+		authMode := "configured"
+		if !authConfigured {
+			authMode = "open (no API key/JWT — local-dev only)"
+		}
 		return c.JSON(fiber.Map{
-			"status": status, "name": "vectorizer", "version": "0.3.0",
+			"status": status, "name": "vectorizer", "version": version.Version, "auth": authMode,
 			"llm_enabled": cfg.LLMEnabled, "chromadb": chromaStatus, "embedding_model": cfg.EmbedModel,
 			"embedding": embed.Status, "embedding_error": embed.LastErr, "embedding_last_ok": embed.LastOK,
 		})
@@ -387,10 +418,13 @@ func main() {
 			N     int    `json:"n_results"`
 		}
 		_ = c.BodyParser(&req)
-		if req.N == 0 {
+		if req.N <= 0 || req.N > 100 {
 			req.N = 5
 		}
-		results, _ := vecStore.Search(req.Query, c.Params("id"), "", "", req.N)
+		results, err := vecStore.Search(req.Query, c.Params("id"), "", "", req.N)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "search failed"})
+		}
 		return c.JSON(fiber.Map{"results": results})
 	})
 	api.Get("/workspaces/:id/queue", func(c *fiber.Ctx) error {
@@ -554,18 +588,33 @@ func main() {
 		return c.JSON(fiber.Map{"fired": true})
 	})
 
-	// gRPC alongside REST (gRPC, Phase 5)
+	// gRPC alongside REST (gRPC, Phase 5). F1: same auth as REST via a
+	// unary interceptor, loopback-only listen, loud failure when the port
+	// is taken (previously swallowed — half-up service with no signal).
 	go func() {
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
-		if err == nil {
-			gs := grpc.NewServer()
-			pb.RegisterVectorizerServiceServer(gs, grpcsrv.New(vecStore, brain))
-			log.Printf("gRPC listening on :%d", cfg.GRPCPort)
-			_ = gs.Serve(lis)
+		grpcAuth := grpcsrv.AuthConfig{
+			APIKey:    cfg.DefaultAPIKey,
+			JWTSecret: cfg.AuthJWTSecret,
+			UseJWT:    cfg.AuthUseAuth,
+		}
+		bind := os.Getenv("GRPC_BIND")
+		if bind == "" {
+			bind = "127.0.0.1"
+		}
+		addr := fmt.Sprintf("%s:%d", bind, cfg.GRPCPort)
+		lis, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Fatalf("gRPC listen %s failed: %v", addr, err)
+		}
+		gs := grpc.NewServer(grpc.UnaryInterceptor(grpcsrv.AuthInterceptor(grpcAuth)))
+		pb.RegisterVectorizerServiceServer(gs, grpcsrv.New(vecStore, brain))
+		log.Printf("gRPC listening on %s", addr)
+		if err := gs.Serve(lis); err != nil {
+			log.Fatalf("gRPC serve failed: %v", err)
 		}
 	}()
 
-	// Dreamer (offline, 1536d) — every 3 hours
+	// Dreamer (offline) — every 3 hours
 	if brain != nil {
 		d := dreamer.New(vecStore, brain, 3*time.Hour)
 		d.Start()
@@ -637,9 +686,6 @@ func (r *rateLimiter) AllowWithLimit(key string, limit int) bool {
 	return true
 }
 
-func isHealthOrMetrics(path string) bool {
-	return path == "/api/v1/health" || path == "/api/v1/metrics" || path == "/health"
-}
 func parseTokens(s string) (int, error) {
 	if v, err := parseInt(s); err == nil {
 		return v, nil

@@ -2,7 +2,11 @@
 """Vectorizer ChromaDB Backup - Lightweight version for slow Docker."""
 import datetime, glob, os, subprocess, sys, tarfile, tempfile, urllib.request, json, gzip
 
-BACKUP_DIR = r"C:\Users\alfir\SynologyDrive\ai\backups\vectorizer"
+# Laptop default: ~/vectorizer-backups. Override with VECTORIZER_BACKUP_DIR.
+# (The previous operator-local absolute path was scrubbed — P0-4.)
+BACKUP_DIR = os.environ.get("VECTORIZER_BACKUP_DIR") or os.path.join(
+    os.path.expanduser("~"), "vectorizer-backups"
+)
 KEEP_DAYS = 7
 os.makedirs(BACKUP_DIR, exist_ok=True)
 

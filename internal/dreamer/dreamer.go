@@ -8,7 +8,7 @@ import (
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
-// Dreamer periodically summarizes recent session context and stores as conclusions (1536d, surprisal).
+// Dreamer periodically summarizes recent session context and stores as conclusions (embedder dims, surprisal).
 type Dreamer struct {
 	store *store.Store
 	brain *llmbrain.Service

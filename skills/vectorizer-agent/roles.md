@@ -69,14 +69,14 @@ One block per agent: `## <agent> — <Role Title>` followed by bullet points. Th
 
 - Store runbooks, deploy records, infra changes, and incident timelines (runbooks importance 4-5).
 - Before any infra change: recall what broke last time this component was touched.
-- Vectorizer ops facts live with you: health `GET /api/v1/health` on `100.90.123.105:8091`, ChromaDB `127.0.0.1:8102`, dashboard `127.0.0.1:8092`, server `ns539881` (SSH `ubuntu@100.90.123.105`, key `~/.ssh/personal`).
-- Server pitfall: `.env` changes need a recreate, not restart: `cd /opt/vectorizer && ./up.sh recreate vectorizer` — plain restart does not re-read `.env`. NEVER recreate with a bare `docker compose -f docker-compose.server.yml …` — any explicit `-f` drops the untracked live-only `docker-compose.override.yml` (tailnet MCP binding, live mounts, `VAULT_WRITEBACK`) — 2026-10-03 fleet outage.
+- Vectorizer ops facts live with you: health `GET /api/v1/health` on `<tailnet-server-ip>:8091`, ChromaDB `127.0.0.1:8102`, dashboard `127.0.0.1:8092`, server `<prod-host>` (SSH `ubuntu@<tailnet-server-ip>`, key `~/.ssh/personal`).
+- Server pitfall: `.env` changes need a recreate, not restart: `cd <server-app-dir> && ./up.sh recreate vectorizer` — plain restart does not re-read `.env`. NEVER recreate with a bare `docker compose -f docker-compose.server.yml …` — any explicit `-f` drops the untracked live-only `docker-compose.override.yml` (tailnet MCP binding, live mounts, `VAULT_WRITEBACK`) — 2026-10-03 fleet outage.
 - Store backup/healthcheck cron outcomes (`vectorizer-backup-daily` 03:00, `vectorizer-health-1h` hourly) when they fail or change.
 
 ## nadia — AI/ML Ops Engineer
 
 - Store model configs, serving decisions, eval numbers, and capacity/latency findings (importance 4 for configs).
-- Vectorizer's brain is your domain: LM Studio at `http://100.121.188.113:1234/v1`, `LLM_MODEL=qwen3.6-35b-a3b`, embed `text-embedding-nomic-embed-text-v2` 768d — record every change with rationale.
+- Vectorizer's brain is your domain: LM Studio at `http://<tailnet-llm-host>:1234/v1`, `LLM_MODEL=<llm-model>`, embed `text-embedding-nomic-embed-text-v2` 768d — record every change with rationale.
 - Record backpressure tuning (`EMBED_TIMEOUT_SECS` 300 / `LLM_TIMEOUT_SECS` 600, `EMBED_MAX_INFLIGHT` 4 / `LLM_MAX_INFLIGHT` 2) so 'why is ingest slow' has an answer in memory.
 - Store eval results (vectorizer `evals/run.go` recall + reasoning-grounded) with the conclusion, not just the numbers.
 
@@ -97,7 +97,7 @@ One block per agent: `## <agent> — <Role Title>` followed by bullet points. Th
 ## shiela — GitHub Agent
 
 - Store repo conventions, review verdicts, release notes, and tricky git recoveries (the working command sequence, importance 4).
-- Index repos as `code_<name>` when the team needs code Q&A; `code_vectorizer` is github.com/alfirus/vectorizer (server repo at `/opt/vectorizer`, mounted `/data/repo`).
+- Index repos as `code_<name>` when the team needs code Q&A; `code_vectorizer` is github.com/alfirus/vectorizer (server repo at `<server-app-dir>`, mounted `/data/repo`).
 - Before a risky merge/rebase: recall how the same operation went last time.
 - Store PR decision rationale ('why we rejected X') so reviews don't loop.
 
@@ -112,7 +112,7 @@ One block per agent: `## <agent> — <Role Title>` followed by bullet points. Th
 
 - Store automation recipes as durable records: cron ids, webhook ids, exact working commands (importance 4-5).
 - Splice-update (`sections`) when a recipe changes — keep ONE current recipe per workflow; a stale copy is a future incident.
-- Your ops surface: vectorizer health/backup crons, the shared MCP bridge `http://100.90.123.105:8093/mcp` (per-request `X-Agent`), Hermes profiles under the Hermes profiles root.
+- Your ops surface: vectorizer health/backup crons, the shared MCP bridge `http://<tailnet-server-ip>:8093/mcp` (per-request `X-Agent`), Hermes profiles under the Hermes profiles root.
 - Before repairing a workflow: recall the last fix for the same failure mode — apply the known fix first.
 - Store incident fixes with root cause ('what broke'), not just the fix commands.
 

@@ -1,11 +1,11 @@
-# vectorizer-ops — nightly backup + hourly health probe (ns539881)
+# vectorizer-ops — nightly backup + hourly health probe (<prod-host>)
 
 Installed by card t_551df9d9 (2026-10-05). Two cron jobs in `ubuntu`'s crontab:
 
 | job | schedule (host time, TZ = UTC) | script | log |
 |---|---|---|---|
-| `vectorizer-backup-daily` | `0 3 * * *` (03:00 UTC = 11:00 MYT) | `/opt/vectorizer/ops-cron/vectorizer-backup-daily.sh` | `/var/log/vectorizer/vectorizer-backup-daily.log` |
-| `vectorizer-health-1h` | `0 * * * *` | `/opt/vectorizer/ops-cron/vectorizer-health-1h.sh` | `/var/log/vectorizer/vectorizer-health-1h.log` |
+| `vectorizer-backup-daily` | `0 3 * * *` (03:00 UTC = 11:00 MYT) | `<server-app-dir>/ops-cron/vectorizer-backup-daily.sh` | `/var/log/vectorizer/vectorizer-backup-daily.log` |
+| `vectorizer-health-1h` | `0 * * * *` | `<server-app-dir>/ops-cron/vectorizer-health-1h.sh` | `/var/log/vectorizer/vectorizer-health-1h.log` |
 
 Shared helper: `vz-alert.sh` (POST/resolve alerts in Alertmanager `127.0.0.1:9093`),
 `chroma_backup.js` (sqlite snapshot, runs in a throwaway `node:24-alpine` container).
@@ -32,7 +32,7 @@ collections > 0), `chromadb-read` (sampled readability, t_4a2e438e: resolve
 `ws_code_ags` + `probe-content-only` + `ws__global` to UUIDs, GET `/count` each
 expecting a numeric body, plus one POST `/get` limit=1 expecting ids — catches the
 compactor/backfill fault class from t_d1b3b72e that stays green on version+count>0;
-recurrence runbook `cd /opt/vectorizer && ./up.sh recreate vectorizer-chromadb`),
+recurrence runbook `cd <server-app-dir> && ./up.sh recreate vectorizer-chromadb`),
 `dashboard` (8092 → 200/307), `mcp` (8093 → any HTTP answer), the four
 containers running/healthy, and **backup freshness** (newest `chroma-volume-*.tar.gz` ≤ 26 h
 old; skipped while the backup lock is held).
@@ -80,7 +80,7 @@ curl -s http://127.0.0.1:8199/api/v2/tenants/default_tenant/databases/default_da
 Compare collection count and per-collection document counts against production
 (`http://127.0.0.1:8102/...`), then `docker rm -f vz-restore-test`.
 
-Config restore: extract `vectorizer-config-<date>.tar.gz` over `/opt/vectorizer/`
+Config restore: extract `vectorizer-config-<date>.tar.gz` over `<server-app-dir>/`
 (only with the stack stopped — deploys go through `up.sh` only, per the standing rule).
 
 ### Drill result (2026-10-05, `restore-drill-v2.sh`, archive `chroma-volume-2026-10-04`)
@@ -128,10 +128,10 @@ Config restore: extract `vectorizer-config-<date>.tar.gz` over `/opt/vectorizer/
   against app-level corruption, bad migrations and accidental drops, **not** disk/host loss.
   Off-host replication (rsync is installed, no remote endpoint configured) is a separate
   decision — follow-up: t_87d57b8f (@maisarah, triage).
-- `/opt/vectorizer/vault-data` (11 G) and the git repo history are **not** part of this backup.
+- `<server-app-dir>/vault-data` (11 G) and the git repo history are **not** part of this backup.
 - Retention is 7 days (measured ≈ 500 MB/day → ~3.5 GB of disk for backups; the 160 MB
   daily archive is 4.97 GB uncompressed).
-- `/opt/vectorizer/vectorizer_backup.py` and `vectorizer_healthcheck.py` are stale
+- `<server-app-dir>/vectorizer_backup.py` and `vectorizer_healthcheck.py` are stale
   Windows-local scripts (hardcoded `C:\Users\...` paths); they are not used by this job.
 
 Re-run `install.sh` any time — it is idempotent.

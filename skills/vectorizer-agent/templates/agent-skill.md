@@ -4,7 +4,7 @@ description: Use when you need to remember, recall, or correct facts across sess
 ---
 # Vectorizer — your semantic memory
 
-Vectorizer is the team's self-hosted semantic memory server (live production): ChromaDB + 768d `nomic-embed-text-v2` embeddings, markdown-truth vault, workflow librarian rerank. API base: `http://100.90.123.105:8091/api/v1` (Tailscale; `GET /api/v1/health` is public).
+Vectorizer is the team's self-hosted semantic memory server (live production): ChromaDB + 768d `nomic-embed-text-v2` embeddings, markdown-truth vault, workflow librarian rerank. API base: `http://<tailnet-server-ip>:8091/api/v1` (Tailscale; `GET /api/v1/health` is public).
 
 **Your identity on this server:**
 - Your workspace: `{{workspace}}` — everything you store goes here. `workspace_id` = agent identity (Chroma collection `ws_{{workspace}}`, fully isolated).
@@ -15,23 +15,23 @@ Vectorizer is the team's self-hosted semantic memory server (live production): C
 
 ```
 # store one message (chunking + 768d embedding are automatic)
-curl -s -X POST http://100.90.123.105:8091/api/v1/messages \
+curl -s -X POST http://<tailnet-server-ip>:8091/api/v1/messages \
   -H "X-API-Key: {{api_key}}" -H "X-Agent: {{agent_name}}" -H "Content-Type: application/json" \
   -d '{"workspace_id":"{{workspace}}","session_id":"<session-id>","role":"assistant","content":"<fact or record>",\
        "metadata":{"source_type":"conversation","tags":"decisions","importance":3,"agent":"{{agent_name}}"}}'
 
 # search your workspace (hybrid = vector + identifier-aware BM25)
-curl -s -X POST http://100.90.123.105:8091/api/v1/messages/search \
+curl -s -X POST http://<tailnet-server-ip>:8091/api/v1/messages/search \
   -H "X-API-Key: {{api_key}}" -H "X-Agent: {{agent_name}}" -H "Content-Type: application/json" \
   -d '{"query":"<what you need>","n_results":5,"where":{"workspace_id":"{{workspace}}","hybrid":true}}'
 
 # cross-workspace recall (all agents, RRF-fused)
-curl -s -X POST http://100.90.123.105:8091/api/v1/messages/search/all ... -d '{"query":"...","n_results":10}'
+curl -s -X POST http://<tailnet-server-ip>:8091/api/v1/messages/search/all ... -d '{"query":"...","n_results":10}'
 ```
 
 Batch store: `POST /api/v1/messages/batch` `{"workspace_id":"{{workspace}}","messages":[...]}` (batches of ~10).
 
-Your profile is wired to the shared MCP bridge (`http://100.90.123.105:8093/mcp`, `X-Agent: {{agent_name}}` header). Prefer the MCP tools over raw curl where they're loaded — they register as `mcp__vectorizer__vectorizer_*` (e.g. `mcp__vectorizer__vectorizer_search`, `mcp__vectorizer__vectorizer_add_message`; 25 tools: messages, brain, provenance, code, peers, workspace) with the same semantics as the REST calls below. If you don't see them in this session (server changes need an agent restart), fall back to the REST calls below.
+Your profile is wired to the shared MCP bridge (`http://<tailnet-server-ip>:8093/mcp`, `X-Agent: {{agent_name}}` header). Prefer the MCP tools over raw curl where they're loaded — they register as `mcp__vectorizer__vectorizer_*` (e.g. `mcp__vectorizer__vectorizer_search`, `mcp__vectorizer__vectorizer_add_message`; 25 tools: messages, brain, provenance, code, peers, workspace) with the same semantics as the REST calls below. If you don't see them in this session (server changes need an agent restart), fall back to the REST calls below.
 
 ## Recall/record loop
 1. **Session start (recap or long task):** `GET /api/v1/conclusions/brief?workspace_id={{workspace}}` — stats + representation + recent + top entities in ONE call.
@@ -58,7 +58,7 @@ Your profile is wired to the shared MCP bridge (`http://100.90.123.105:8093/mcp`
 ## Programming projects (`code_*` workspaces)
 User says **"index this project"** → stage on the server, index, verify:
 1. Workspace name `code_<folder>` (lowercase, `-`→`_`). ONE canonical workspace per project — never invent `code_x2`/`_full`/`_v2`; re-index into the SAME workspace (unchanged files hash-skip). Stale look-alike collections should be deleted, not reused.
-2. Stage: `tar` the project (exclude `node_modules .next .git dist build`) → `scp` to `ubuntu@100.90.123.105:/opt/code-stage/<name>/` (key `~/.ssh/personal`). Container path = `/data/code-stage/<name>` (laptop paths never work — the server only sees its mounts; `/opt/vectorizer` is mounted read-only at `/data/repo`).
+2. Stage: `tar` the project (exclude `node_modules .next .git dist build`) → `scp` to `ubuntu@<tailnet-server-ip>:<server-stage-dir>/<name>/` (key `~/.ssh/personal`). Container path = `/data/code-stage/<name>` (laptop paths never work — the server only sees its mounts; `<server-app-dir>` is mounted read-only at `/data/repo`).
 3. Index: `POST /api/v1/code/index` `{"path":"/data/code-stage/<name>","workspace_id":"code_<name>"}` — budget ~15s/file (LM Studio embeds); a client timeout is fine, the server keeps working — poll `GET /api/v1/code/symbols`.
 4. Verify: `GET /api/v1/code/symbols?workspace_id=code_<name>` (junk-check) + `GET /api/v1/code/callers?workspace_id=code_<name>&symbol=<known>`.
 
@@ -77,4 +77,4 @@ User says **"index this project"** → stage on the server, index, verify:
 - Store decisions + rationale, not transcripts. One fact per message recalls better than one long brief.
 - Empty search result is a real answer: "I don't have that in memory."
 - Embed/LLM calls queue at LM Studio under load (server retries with backoff) — don't hammer retries, raise nothing.
-- Server: `ns539881` / Tailscale `100.90.123.105` / SSH `ubuntu@100.90.123.105` key `~/.ssh/personal`. Docs: https://github.com/alfirus/vectorizer
+- Server: `<prod-host>` / Tailscale `<tailnet-server-ip>` / SSH `ubuntu@<tailnet-server-ip>` key `~/.ssh/personal`. Docs: https://github.com/alfirus/vectorizer

@@ -43,13 +43,13 @@ Follow the existing project architecture unless there is a documented reason to 
 
 Before creating a new abstraction, inspect the existing codebase for an equivalent pattern.
 
-Vectorizer architecture (see `docs/BLUEPRINT.md` v0.2.0):
+Vectorizer architecture (see `docs/BLUEPRINT.md` v0.4.0):
 - Go/Fiber REST on `:8091` + gRPC on `:50051`
-- ChromaDB v2 `ws_<id>` collections (1536d (Qwen3-Embedding-4B MRL) `Qwen/Qwen3-Embedding-4B (1536d MRL, nomic-embed-text 768d fallback)`, cosine HNSW)
+- ChromaDB v2 `ws_<id>` collections (768d `text-embedding-nomic-embed-text-v2` canonical, 1536d Qwen opt-in, cosine HNSW)
 - Layered config: `env > .env > config.toml > defaults` (`config/config.go`)
-- Store handles chunking (4000 chars), embedding, hybrid search (BM25 RRF)
+- Store handles chunking (6000 chars max), embedding, hybrid search (BM25 RRF)
 - Handlers: workspaces, sessions, peers, messages, conclusions, webhooks, brain, admin
-- Additional layers: `internal/security` (JWT w/p/ad), `internal/dreamer` (1536d (Qwen3-Embedding-4B MRL)), `mcp/` proxy
+- Additional layers: `internal/security` (JWT w/p/ad), `internal/dreamer` (embedder dims), `mcp/` proxy
 
 ## Code Quality
 

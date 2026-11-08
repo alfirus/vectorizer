@@ -16,6 +16,8 @@ MODE="${1:?usage: vz-alert.sh fire|resolve NAME SEVERITY SUMMARY}"
 NAME="${2:?missing alert name}"
 SEV="${3:?missing severity}"
 SUMMARY="${4:-$NAME}"
+# Host label resolves at runtime — never hardcode the prod hostname in repo.
+HOST_LABEL="${ALERT_HOST:-$(hostname)}"
 
 case "$MODE" in
   fire)    STARTS=$(date -u -d "-1 minute" +%Y-%m-%dT%H:%M:%SZ); ENDS=$(date -u -d "+90 minutes" +%Y-%m-%dT%H:%M:%SZ) ;;
@@ -24,9 +26,10 @@ case "$MODE" in
 esac
 
 PAYLOAD=$(jq -n --arg name "$NAME" --arg sev "$SEV" --arg sum "$SUMMARY" \
+                      --arg host "$HOST_LABEL" \
                       --arg starts "$STARTS" --arg ends "$ENDS" \
-  '[{ labels:      { alertname:$name, severity:$sev, component:"vectorizer", host:"ns539881" },
-     annotations: { summary:$sum, runbook:"/opt/vectorizer/ops-cron/README.md" },
+  '[{ labels:      { alertname:$name, severity:$sev, component:"vectorizer", host:$host },
+     annotations: { summary:$sum, runbook:"ops-cron/README.md (live values in private runbook)" },
      startsAt:$starts, endsAt:$ends }]')
 
 TMP=$(mktemp)

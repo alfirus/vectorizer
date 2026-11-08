@@ -10,14 +10,20 @@ services:
     environment:
       CHROMA_HOST: chromadb
       CHROMA_PORT: 8000
+      # 1536d Qwen is the OPT-IN for this host (canonical default is 768d
+      # Nomic — P0-1). Set these explicitly in the private .env instead of
+      # relying on compose defaults.
       EMBED_PROVIDER: openai-compatible
       EMBED_MODEL: text-embedding-nomic-embed-text-v2
       EMBED_DIMENSIONS: 768
-      LM_STUDIO_URL: http://100.121.188.113:1234/v1
+      # Live LLM endpoint: private .env only (LM_STUDIO_URL,
+      # LM_STUDIO_API_KEY). Never commit the tailnet address.
+      LM_STUDIO_URL: ${LM_STUDIO_URL:?set LM_STUDIO_URL in the private .env}
       LIBRARIAN_MODE: workflow
       VAULT_ROOT: /data/ai
     volumes:
-      - /opt/vectorizer/vault-data:/data/ai
+      # Live data dir: private .env only (VAULT_DATA_DIR). Never commit it.
+      - ${VAULT_DATA_DIR:?set VAULT_DATA_DIR in the private .env}:/data/ai
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -58,7 +64,9 @@ services:
       start_period: 20s
 
   chromadb:
-    image: chromadb/chroma:1.1.0
+    # Canonical ChromaDB pin: 1.0.0 everywhere (P0-1). Validate a new minor
+    # in staging before bumping both compose files + docs together.
+    image: chromadb/chroma:1.0.0
     container_name: vectorizer-chromadb
     ports:
       - "127.0.0.1:8102:8000"
@@ -94,14 +102,16 @@ services:
       VECTORIZER_URL: http://vectorizer:8091
       VECTORIZER_API_KEY: ${DEFAULT_API_KEY}
       CHROMA_URL: http://chromadb:8000
-      LM_STUDIO_URL: http://100.121.188.113:1234/v1
+      # Live LLM endpoint/model: private .env only. Never commit them.
+      LM_STUDIO_URL: ${LM_STUDIO_URL:?set LM_STUDIO_URL in the private .env}
       LM_STUDIO_KEY: ${LM_STUDIO_API_KEY}
-      LLM_MODEL: qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
       VAULT_ROOT: /data/ai
-      GRAPH_PATH: /data/ai/maisarah/vault/00-index/GRAPH.json
+      # Vault graph location differs per install: private .env only.
+      GRAPH_PATH: ${GRAPH_PATH:?set GRAPH_PATH in the private .env}
       REINDEX_PYTHON: python3
     volumes:
-      - /opt/vectorizer/vault-data:/data/ai
+      - ${VAULT_DATA_DIR:?set VAULT_DATA_DIR in the private .env}:/data/ai
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

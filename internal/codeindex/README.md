@@ -11,7 +11,7 @@ symbol extraction per language; Go + Python + TS first).
 
 - **Workspace naming:** `code_<repo>` (e.g. `code_vectorizer`). Normal
   workspace isolation applies; `_global` merge + floors apply unchanged.
-- **Chunk = symbol, not 4000-char window.** One chunk per top-level
+- **Chunk = symbol, not `maxChunkSize` (6000-char) window.** One chunk per top-level
   def (func/type/class/interface). Body + docstring. Small symbols merge
   to a ~2000-char floor so Chroma isn't spammed with 3-line getters.
 - **Metadata per chunk** (existing keys, already passed through by
@@ -57,6 +57,6 @@ symbols + BFS Expand is enough until slowness is proven.
   `file:<path>` conclusion IDs — trace-readable).
 - MCP 22→25: `vectorizer_index_repo`, `vectorizer_symbols`, `vectorizer_callers`.
 - Validated: walk+parse+CALLS edge on scratch repo (`edges:1` main→Greet);
-  full write path needs ns539881 (laptop can't reach server Chroma).
+  full write path needs <prod-host> (laptop can't reach server Chroma).
 - Remaining: index the real repo on-server, ask "what calls UpdateMessage",
   compare vs grep.

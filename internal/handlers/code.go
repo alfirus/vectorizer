@@ -21,9 +21,10 @@ import (
 // DEFINES/CALLS/IMPORTS as reasoning edges so trace/Expand answers
 // "what calls X" structurally.
 //
-// Security: path must be server-local. The server runs on ns539881; the
-// agent passes a repo path ON THE SERVER (e.g. /opt/vectorizer). No
-// file content crosses the wire — only the path string.
+// Security: path must be server-local. The server only sees its own
+// mounts; the agent passes a repo path ON THE SERVER (e.g. /data/repo/<name>).
+// No file content crosses the wire — only the path string. Requests are
+// jailed to CODE_INDEX_ROOT (see jailCodePath) — F5.
 type CodeHandler struct{ store *store.Store }
 
 func NewCodeHandler(s *store.Store) *CodeHandler { return &CodeHandler{store: s} }
@@ -58,7 +59,11 @@ type IndexResult struct {
 
 // Index walks path and indexes code files into workspace_id
 // (default code_<repo-basename>).
-// POST /code/index {"path": "/opt/vectorizer", "workspace_id"?: "...", "session_id"?: "..."}
+// POST /code/index {"path": "/data/repo/<name>", "workspace_id"?: "...", "session_id"?: "..."}
+//
+// F5 jail: path must resolve inside CODE_INDEX_ROOT (comma-separated,
+// default "/data/ai,/data/repo"). Symlinks escaping the root are skipped,
+// workspace_id is validated. Requests outside the jail get 403.
 func (h *CodeHandler) Index(c *fiber.Ctx) error {
 	var req struct {
 		Path        string `json:"path"`
@@ -71,22 +76,32 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 	if req.Path == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "path is required (server-local repo path)"})
 	}
-	info, err := os.Stat(req.Path)
+	if req.WorkspaceID != "" && !models.ValidateResourceName(req.WorkspaceID) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid workspace_id format"})
+	}
+	if !requireWorkspace(c, req.WorkspaceID) {
+		return nil
+	}
+	root, err := jailCodePath(req.Path)
+	if err != nil {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "path is outside the indexable roots (CODE_INDEX_ROOT)"})
+	}
+	info, err := os.Stat(root)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "path is not readable on the server"})
 	}
 	// Single-file mode: index just this file (root files like main.go).
 	// Walk root becomes its dir; rel paths stay repo-relative.
-	walkRoot := req.Path
+	walkRoot := root
 	if !info.IsDir() {
-		if codeindex.LanguageFor(req.Path) == "" {
+		if codeindex.LanguageFor(root) == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "file type not indexable"})
 		}
-		walkRoot = filepath.Dir(req.Path)
+		walkRoot = filepath.Dir(root)
 	}
 	ws := req.WorkspaceID
 	if ws == "" {
-		ws = "code_" + strings.ToLower(filepath.Base(req.Path))
+		ws = "code_" + strings.ToLower(filepath.Base(root))
 	}
 	sess := req.SessionID
 	if sess == "" {
@@ -109,13 +124,24 @@ func (h *CodeHandler) Index(c *fiber.Ctx) error {
 		if err != nil {
 			return nil
 		}
-		if singleFile && p != req.Path {
+		// F5: never follow a symlink out of the jail, even when the
+		// requested root itself is inside it.
+		if d.Type()&os.ModeSymlink != 0 {
+			if rp, everr := filepath.EvalSymlinks(p); everr != nil || !withinDir(walkRootResolved(walkRoot), rp) {
+				res.Errors = append(res.Errors, relDot(p, walkRoot)+": skipped symlink escaping index root")
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		if singleFile && p != root {
 			if d.IsDir() && p != walkRoot {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		rel, _ := filepath.Rel(req.Path, p)
+		rel, _ := filepath.Rel(walkRoot, p)
 		if singleFile {
 			rel = filepath.Base(p)
 		}
@@ -251,6 +277,9 @@ func (h *CodeHandler) Symbols(c *fiber.Ctx) error {
 	if ws == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id is required"})
 	}
+	if !requireWorkspace(c, ws) {
+		return nil
+	}
 	fileFilter := strings.ToLower(c.Query("file"))
 	// offset+limit: a 200-item hard cap with no paging silently hid files on
 	// any repo with >200 source files, and `count` read like a true total.
@@ -327,6 +356,9 @@ func (h *CodeHandler) Callers(c *fiber.Ctx) error {
 	if ws == "" || symbol == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "workspace_id and symbol are required"})
 	}
+	if !requireWorkspace(c, ws) {
+		return nil
+	}
 	callers, err := h.store.CodeCallers(ws, symbol)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "query failed"})
@@ -398,4 +430,70 @@ func loadGitignore(root string) map[string]bool {
 		out[ln] = true
 	}
 	return out
+}
+
+// codeIndexRoots returns the allowlisted roots for /code/index from
+// CODE_INDEX_ROOT (comma-separated). Default is the in-container mounts.
+func codeIndexRoots() []string {
+	raw := os.Getenv("CODE_INDEX_ROOT")
+	if strings.TrimSpace(raw) == "" {
+		raw = "/data/ai,/data/repo"
+	}
+	var roots []string
+	for _, r := range strings.Split(raw, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			roots = append(roots, r)
+		}
+	}
+	return roots
+}
+
+// withinDir reports whether p sits inside root (or is root itself).
+func withinDir(root, p string) bool {
+	if p == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveForJail returns the absolute, symlink-resolved form of p,
+// falling back to the lexical absolute path when it does not exist
+// (e.g. an allowlist root that is not mounted on this host).
+func resolveForJail(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	if rp, err := filepath.EvalSymlinks(abs); err == nil {
+		return rp
+	}
+	return abs
+}
+
+// jailCodePath resolves the requested index path and requires it to sit
+// inside one of the allowlisted roots. Symlinks are resolved, so
+// /allowed/link -> /etc fails closed.
+func jailCodePath(path string) (string, error) {
+	resolved := resolveForJail(path)
+	for _, r := range codeIndexRoots() {
+		if withinDir(resolveForJail(r), resolved) {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("path outside indexable roots")
+}
+
+// walkRootResolved resolves the walk root once per request for the
+// in-walk symlink check.
+func walkRootResolved(walkRoot string) string { return resolveForJail(walkRoot) }
+
+func relDot(p, walkRoot string) string {
+	if rel, err := filepath.Rel(walkRoot, p); err == nil {
+		return rel
+	}
+	return p
 }

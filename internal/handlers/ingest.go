@@ -9,6 +9,11 @@ import (
 	"github.com/alfirus/vectorizer/internal/store"
 )
 
+// maxUploadBytes caps a single upload read (multipart file or raw/JSON
+// body). Every other write path enforces a 100k-char cap; upload must not
+// be the unbounded one (F7).
+const maxUploadBytes = 100000
+
 type IngestHandler struct{ store *store.Store }
 func NewIngestHandler(s *store.Store) *IngestHandler { return &IngestHandler{store: s} }
 
@@ -32,10 +37,13 @@ func (h *IngestHandler) Upload(c *fiber.Ctx) error {
 		if j.Content!="" { content=j.Content } else if j.Text!="" { content=j.Text } else if j.Body!="" { content=j.Body } else if j.File!="" { content=j.File }
 	}
 	if ws=="" || sess=="" { return c.Status(400).JSON(fiber.Map{"error":"workspace_id and session_id required"})}
+	if !requireWorkspace(c, ws) {
+		return nil
+	}
 	// if content already extracted from JSON, ingest directly
 	if content!="" {
 		content=strings.ReplaceAll(content, "\x00", "")
-		return h.ingestText(ws, sess, content)
+		return h.ingestText(c, ws, sess, content)
 	}
 	fh, err:=c.FormFile("file")
 	if err!=nil {
@@ -46,32 +54,53 @@ func (h *IngestHandler) Upload(c *fiber.Ctx) error {
 		// avoid double-JSON: if body looks like JSON with content field, prefer parsed content
 		if content=="" { content=body }
 		content=strings.ReplaceAll(content, "\x00", "")
-		return h.ingestText(ws, sess, content)
+		return h.ingestText(c, ws, sess, content)
 	}
-	f, _:=fh.Open(); defer f.Close()
-	b,_:=io.ReadAll(f)
+	// F7: Open can fail (nil file -> Close panic). Cap the read so a
+	// multi-GB upload is not buffered into RAM.
+	f, err:=fh.Open()
+	if err!=nil {
+		return c.Status(400).JSON(fiber.Map{"error":"cannot open uploaded file"})
+	}
+	defer f.Close()
+	b,err:=io.ReadAll(io.LimitReader(f, maxUploadBytes+1))
+	if err!=nil {
+		return c.Status(400).JSON(fiber.Map{"error":"cannot read uploaded file"})
+	}
+	if len(b) > maxUploadBytes {
+		return c.Status(413).JSON(fiber.Map{"error":"upload too large (max 100k chars)"})
+	}
 	text:=string(b)
 	// light parse: if PDF etc, just treat as text
 	text=strings.ReplaceAll(text, "\x00", "")
-	return h.ingestText(ws, sess, text)
+	return h.ingestText(c, ws, sess, text)
 }
 
-func (h *IngestHandler) ingestText(ws, sess, text string) error {
+func (h *IngestHandler) ingestText(c *fiber.Ctx, ws, sess, text string) error {
+	if len(text) > maxUploadBytes {
+		return c.Status(413).JSON(fiber.Map{"error":"content too large (max 100k chars)"})
+	}
 	msg:=models.NewMessage(ws, sess, "system", text)
-	// store handles chunking + 1536d (Qwen3)
+	// store handles chunking + embedding
 	if err:=h.store.AddMessage(msg, text); err!=nil { return fiber.NewError(500, "ingest failed") }
-	return nil
+	return c.Status(201).JSON(fiber.Map{"id": msg.ID, "workspace_id": ws, "session_id": sess, "stored": true})
 }
 
 func (h *IngestHandler) Grep(c *fiber.Ctx) error {
 	ws:=c.Query("workspace_id"); q:=c.Query("q")
 	if ws==""||q=="" { return c.Status(400).JSON(fiber.Map{"error":"workspace_id and q required"})}
+	if !requireWorkspace(c, ws) {
+		return nil
+	}
 	docs,_:=h.store.Grep(ws, c.Query("session_id"), q, 50)
 	return c.JSON(fiber.Map{"results":docs})
 }
 
 func (h *IngestHandler) Temporal(c *fiber.Ctx) error {
 	ws:=c.Query("workspace_id"); q:=c.Query("q")
+	if !requireWorkspace(c, ws) {
+		return nil
+	}
 	after:=c.Query("after"); before:=c.Query("before")
 	docs,_,_:=h.store.SearchWithOptions(q, ws, c.Query("session_id"), "", 10, 0, after, before)
 	return c.JSON(fiber.Map{"results":docs})

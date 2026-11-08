@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# vectorizer-health-1h.sh — hourly probe of the vectorizer stack on ns539881.
-# Installed as:  0 * * * *  in ubuntu's crontab.
+# vectorizer-health-1h.sh — hourly probe of the vectorizer stack on the prod host.
+# Installed as:  0 * * * *  in the prod host crontab.
 # Log: /var/log/vectorizer/vectorizer-health-1h.log
 #
 # Checks (one "[ts] OK|FAIL check=... detail=..." line each, then a SUMMARY line):
@@ -11,7 +11,7 @@
 #                    (expect ids). Catches the compactor/backfill fault class
 #                    (t_d1b3b72e) that stays green on version+count>0 alone.
 #                    Sample: ws_code_ags + probe-content-only + ws__global.
-#                    Recurrence runbook: cd /opt/vectorizer && ./up.sh recreate
+#                    Recurrence runbook: cd <server-app-dir> && ./up.sh recreate
 #                    vectorizer-chromadb (never bare -f; see up.sh header).
 #   dashboard        HTTP on 127.0.0.1:8092 (200/307)
 #   mcp              HTTP answer on 127.0.0.1:8093 (any code = alive; 000 = down)
@@ -30,8 +30,8 @@
 set -uo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
-OPS=/opt/vectorizer/ops-cron
-BK=/home/ubuntu/backups/vectorizer
+OPS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BK="${BACKUP_ROOT:-$HOME/backups}/vectorizer"
 STATE=$HOME/.local/state/vectorizer-ops
 LOCK="$BK/.backup.lock"
 MAX_BACKUP_AGE_S=$(( 26 * 3600 ))
@@ -158,14 +158,15 @@ NF=${#SVC_FAILS[@]}
 BK_STALE=no; [ -n "$BK_FAIL" ] && BK_STALE=yes
 log "SUMMARY status=$([ "$NF" -eq 0 ] && [ "$BK_STALE" = no ] && echo ok || echo FAIL) service_fails=$NF backup_stale=$BK_STALE"
 
+HOST="$(hostname)"
 if [ "$NF" -gt 0 ]; then
   if [ ! -f "$STATE/health_failed" ]; then
     "$OPS/vz-alert.sh" fire VectorizerHealth critical \
-      "vectorizer stack unhealthy on ns539881: ${SVC_FAILS[*]}" \
+      "vectorizer stack unhealthy on $HOST: ${SVC_FAILS[*]}" \
       && touch "$STATE/health_failed" || log "ALERT_DELIVERY_FAILED VectorizerHealth"
   else
     "$OPS/vz-alert.sh" fire VectorizerHealth critical \
-      "vectorizer stack still unhealthy on ns539881: ${SVC_FAILS[*]}" \
+      "vectorizer stack still unhealthy on $HOST: ${SVC_FAILS[*]}" \
       || log "ALERT_DELIVERY_FAILED VectorizerHealth"
   fi
 elif [ -f "$STATE/health_failed" ]; then
@@ -176,7 +177,7 @@ fi
 
 if [ -n "$BK_FAIL" ]; then
   "$OPS/vz-alert.sh" fire VectorizerBackupStale critical \
-    "vectorizer backup stale/missing on ns539881: $BK_FAIL" \
+    "vectorizer backup stale/missing on $HOST: $BK_FAIL" \
     && touch "$STATE/backup_stale" || log "ALERT_DELIVERY_FAILED VectorizerBackupStale"
 elif [ -f "$STATE/backup_stale" ]; then
   if "$OPS/vz-alert.sh" resolve VectorizerBackupStale critical "vectorizer backups fresh again"; then

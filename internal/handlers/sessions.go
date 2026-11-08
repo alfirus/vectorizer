@@ -12,6 +12,7 @@ func (h *SessionsHandler) CreateSession(c *fiber.Ctx) error {
 	var req struct{ WorkspaceID string `json:"workspace_id"`; SessionID string `json:"session_id"`; Title string `json:"title"`; PeerIDs []string `json:"peer_ids"`; Scope string `json:"scope"`}
 	if err:=c.BodyParser(&req); err!=nil { return c.Status(400).JSON(fiber.Map{"error":"invalid body"})}
 	if req.WorkspaceID=="" || req.SessionID=="" { return c.Status(400).JSON(fiber.Map{"error":"workspace_id and session_id required"})}
+	if !requireWorkspace(c, req.WorkspaceID) { return nil }
 	// Persist peer_ids/scope as a zero-doc marker via metadata (no embedding)
 	// Use EnsureWorkspace + store session marker
 	if err:=h.store.SaveSessionMeta(req.WorkspaceID, req.SessionID, req.PeerIDs, req.Scope); err!=nil { return c.Status(500).JSON(fiber.Map{"error":"failed to create session"})}
@@ -20,6 +21,7 @@ func (h *SessionsHandler) CreateSession(c *fiber.Ctx) error {
 func (h *SessionsHandler) ListSessions(c *fiber.Ctx) error {
 	ws:=c.Query("workspace_id")
 	if ws=="" { return c.Status(400).JSON(fiber.Map{"error":"workspace_id required"})}
+	if !requireWorkspace(c, ws) { return nil }
 	sessions,_:=h.store.ListSessions(ws)
 	return c.JSON(fiber.Map{"sessions":sessions})
 }

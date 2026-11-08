@@ -1,7 +1,7 @@
 # Vectorizer — Architecture Blueprint
 
 **Version:** 0.4.0  
-**Status:** Self-hosted agentic (Go/Chroma 1536d Qwen3, reasoning graph + deriver, Google AI Studio)  
+**Status:** Self-hosted agentic (Go/Chroma 1.0.0, 768d Nomic canonical + 1536d Qwen3 opt-in, reasoning graph + deriver, Google AI Studio)  
 **Last updated:** 2026-08-25
 
 ---
@@ -24,11 +24,11 @@
 
 Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
-- **Message storage** with automatic chunking and embedding generation (4000 chars, `Qwen/Qwen3-Embedding-4B` 1536d via MRL, `nomic-embed-text` 768d fallback, Google AI Studio `text-embedding-004`/`005` 768d)
+- **Message storage** with automatic chunking and embedding generation (canonical default: `text-embedding-nomic-embed-text-v2` 768d; opt-in `Qwen/Qwen3-Embedding-4B` 1536d via MRL; Google AI Studio `text-embedding-004`/`005` 768d)
 - **Semantic + hybrid search** (vector cosine HNSW + BM25 RRF) with scoping and temporal filters
 - **Peers + peer cards** (`ws_<id>_peers` / `ws_<id>_peer_cards`)
 - **Dialectic chat** (`POST /workspaces/:id/chat`, observer/observed, `reasoning_level` none/low/medium/high/max)
-- **Conclusions + representations + dreamer** (offline `summarize→embed 1536d→ws_<id>_conclusions`, `qwen-embed` MRL)
+- **Conclusions + representations + dreamer** (offline `summarize→embed→ws_<id>_conclusions` at the configured embed dim, canonical 768d)
 - **Optional LLM brain** for summarization and Q&A (SSE streaming, auto-fetch)
 - **Workspace isolation** — each agent gets its own namespace (`ws_<id>`)
 - **Embedder interface** — pluggable `embedding.Embedder` abstraction; swap providers without changing callers
@@ -45,7 +45,7 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 
 - Not a database replacement — it's an append-only memory layer on top of ChromaDB
 - Not a session store — sessions are logical groupings, not persisted independently
-- Core: peers, dialectic, conclusions/representations, dreamer, scopes — single-binary Go/Chroma (no Postgres/pgvector), 1536d pinned (Qwen3 4B MRL)
+- Core: peers, dialectic, conclusions/representations, dreamer, scopes — single-binary Go/Chroma 1.0.0 (no Postgres/pgvector), embed dim canonical 768d (Nomic), 1536d Qwen3 4B MRL opt-in
 
 ---
 
@@ -78,12 +78,12 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 | **Config** | `config/` | Layered config: `env > .env > config.toml > defaults` (BurntSushi/toml) |
 | **Security** | `internal/security/` | JWT `w/p/ad` claims, HS256, `scripts/generate_jwt.go` |
 | **ChromaDB Client** | `internal/chromadb/` | ChromaDB v2 REST API wrapper (collections, upsert, query, get, heartbeat) |
-| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion via `Embedder` interface (Google AI Studio `text-embedding-004`/`005` 768d, OpenAI-compatible 1536d `Qwen3-Embedding-4B` MRL, `nomic-embed-text` 768d fallback) |
+| **Embedding Service** | `internal/embedding/` | Text-to-vector conversion via `Embedder` interface (canonical 768d `text-embedding-nomic-embed-text-v2`; opt-in 1536d `Qwen/Qwen3-Embedding-4B` MRL via vLLM; Google AI Studio `text-embedding-004`/`005` 768d) |
 | **LLM Brain** | `internal/llmbrain/` | Chat/summarize via `/chat/completions` (`ChatWithTemp`, `ChatWithHistory`, `prompts.go` AgentSystemPrompt) |
 | **Models** | `internal/models/` | Workspace, Session, Message (with `Metadata`), Peer, PeerCard, SearchRequest |
-| **Store** | `internal/store/` | Chunking, embed (`1536d`), upsert (retry), search (vector+BM25 RRF), conclusions, `reasoning.go` (`ws_<id>_reasoning`), peers, sessions, grep, TTL, scopes |
+| **Store** | `internal/store/` | Chunking (`maxChunkSize` 6000 chars; vault indexer pre-chunks 3600–3800 to avoid double-split), embed (canonical 768d), upsert (retry), search (vector+BM25 RRF), conclusions, `reasoning.go` (`ws_<id>_reasoning`), peers, sessions, grep, TTL, scopes |
 | **Deriver** | `internal/deriver/` | Async `Enqueue` → `2s/5msg` batch → `Summarize → CreateConclusion + AddReasoningEdge` |
-| **Dreamer** | `internal/dreamer/` | Surprisal `3h` cron: `QueryConclusions` distance `<0.15` skip → `summarize→embed 1536d→ws_<id>_conclusions` |
+| **Dreamer** | `internal/dreamer/` | Surprisal `3h` cron: `QueryConclusions` distance `<0.15` skip → `summarize→embed→ws_<id>_conclusions` (configured embed dim) |
 | **Webhooks** | `internal/webhooks/` | In-mem endpoint registry + `Fire` |
 | **gRPC** | `internal/grpc/` + `proto/vectorizer.proto` | `VectorizerService` (`AddMessage/Search/Chat/Health`) alongside REST `:50051` |
 | **Handlers** | `internal/handlers/` | Workspaces, messages (deriver Enqueue), sessions, peers, chat (agentic 5-tool loop), scopes, conclusions, keys, webhooks, brain, admin |
@@ -101,7 +101,7 @@ Layered config: `env > .env > config.toml > defaults` via `BurntSushi/toml`. Sec
 **Key design decisions:**
 - Embedding and LLM brain have **separate provider configs**
 - `LLM_ENABLED` gate; `AUTH_USE_AUTH` JWT gate
-- Pinned 1536d (`Qwen/Qwen3-Embedding-4B` MRL), same dim for `ws_<id>` / `ws_<id>_conclusions` / `ws_<id>_dream` / `ws_<id>_peers`
+- Pinned canonical 768d (`text-embedding-nomic-embed-text-v2`), same dim for `ws_<id>` / `ws_<id>_conclusions` / `ws_<id>_dream` / `ws_<id>_peers` (1536d `Qwen/Qwen3-Embedding-4B` MRL is an explicit opt-in, not the default)
 
 **Config fields:**
 
@@ -190,19 +190,19 @@ Optional service for summarization and agentic Q&A. Uses the OpenAI-compatible `
 
 ### 3.5 Store (`internal/store/store.go` + `reasoning.go` + `conclusions.go`)
 
-Core business logic layer. Orchestrates embedding generation (1536d), chunking, ChromaDB, and reasoning graph.
+Core business logic layer. Orchestrates embedding generation (canonical 768d), chunking, ChromaDB, and reasoning graph.
 
 **Key methods:**
-- `AddMessage(msg, content)` → chunks 4000, embed 1536d batch, upsert `ws_<workspace_id>` with `scope`/`peer_id` metadata, 3× retry
+- `AddMessage(msg, content)` → chunks `maxChunkSize` (6000 chars; vault indexer pre-chunks 3600–3800 to avoid double-split), embed batch at configured dim, upsert `ws_<workspace_id>` with `scope`/`peer_id` metadata, 3× retry
 - `Search` / `HybridSearch` → vector `EmbedSingle` + `HNSW cosine` (+ BM25 RRF), dedup/sort, temporal `after`/`before` via `SearchWithOptions`
 - `GetReasoningChain(ws, conclusionID)` → BFS over `ws_<id>_reasoning` (`AddReasoningEdge`: `conclusion_id → premise_ids + supporting_message_ids`), `GetObservationContext(ws, session, chunkID, window=2)` → surrounding chunks
-- `CreateConclusion` / `QueryConclusions` → `ws_<id>_conclusions` (1536d) + `GetRepresentation` (conclusions + session messages)
-- `dummyVector()` → `embed.Dimensions()` dynamic (1536 for Qwen3)
+- `CreateConclusion` / `QueryConclusions` → `ws_<id>_conclusions` (configured embed dim) + `GetRepresentation` (conclusions + session messages)
+- `dummyVector()` → `embed.Dimensions()` dynamic (768 canonical)
 
 **Chunking strategy:**
-- Max 4000 characters per chunk (`maxChunkSize`), word-boundary, `chunk_index`/`total_chunks` metadata
+- Max 6000 characters per chunk (`maxChunkSize`), word-boundary, `chunk_index`/`total_chunks` metadata; the vault indexer pre-chunks markdown at 3600–3800 chars so server chunking rarely re-splits vault content
 
-**Collection naming:** `ws_<workspace_id>`, `ws_<id>_conclusions`, `ws_<id>_reasoning`, `ws_<id>_peers`, `ws_<id>_peer_cards`, `ws_<id>_scopes` — all same `1536d` dim, flattened to workspace.
+**Collection naming:** `ws_<workspace_id>`, `ws_<id>_conclusions`, `ws_<id>_reasoning`, `ws_<id>_peers`, `ws_<id>_peer_cards`, `ws_<id>_scopes` — all same configured embed dim (canonical 768d), flattened to workspace.
 
 ### 3.6 Handlers (`internal/handlers/`)
 
@@ -210,11 +210,11 @@ Core business logic layer. Orchestrates embedding generation (1536d), chunking, 
 |---------|--------|----------------|
 | `WorkspacesHandler` | GET/POST /workspaces, GET /workspaces/:id | Workspace CRUD (Chroma-backed `ws_<id>`, `EnsureCollection`) |
 | `MessagesHandler` | POST /messages, POST /messages/batch, GET/POST /messages/search, GET /workspaces/:id/stats, GET /messages | Messages (scope/peer_ids, NUL-strip, ValidateResourceName, hybrid `?hybrid=true`) |
-| `SessionsHandler` | POST/GET /sessions | Sessions `{peer_ids, scope}` (`SaveSessionMeta` 1536d marker) |
-| `PeersHandler` | POST/GET /workspaces/:id/peers, PUT/GET /peers/:peer_id/card | Peers + peer cards (`ws_<id>_peers`, `ws_<id>_peer_cards` 1536d) |
+| `SessionsHandler` | POST/GET /sessions | Sessions `{peer_ids, scope}` (`SaveSessionMeta` dim-agnostic marker) |
+| `PeersHandler` | POST/GET /workspaces/:id/peers, PUT/GET /peers/:peer_id/card | Peers + peer cards (`ws_<id>_peers`, `ws_<id>_peer_cards` at configured dim) |
 | `ChatHandler` | POST/GET /workspaces/:id/chat | Dialectic chat (observer/observed, `reasoning_level` none/low/medium/high/max) |
 | `IngestHandler` | POST /messages/upload, GET /messages/grep, GET /messages/temporal, DELETE /workspaces/:id/ttl | Upload, grep, temporal search, TTL cleanup |
-| `ConclusionsHandler` | POST/GET /conclusions, DELETE /conclusions/:id, GET /representations | Conclusions (`ws_<id>_conclusions` 1536d) + representations |
+| `ConclusionsHandler` | POST/GET /conclusions, DELETE /conclusions/:id, GET /representations | Conclusions (`ws_<id>_conclusions` at configured dim) + representations |
 | `WebhooksHandler` | POST/GET /webhooks | Endpoint registry |
 | `BrainHandler` | POST /brain/summarize (+ stream SSE), POST /brain/ask | LLM summarize/ask (auto-fetch, `ChatWithTemp`) |
 
@@ -254,7 +254,7 @@ MessagesHandler.AddMessage()
     ▼
 Store.AddMessage(msg, content)
     │
-    ├──► chunkText(content, 4000)     // split into chunks
+    ├──► chunkText(content, maxChunkSize=6000) // split into chunks (vault pre-chunks 3600–3800)
     │
     ├──► embedService.Embed(documents) // generate vectors
     │
@@ -594,8 +594,8 @@ HTTP status codes:
 | `OAI_COMPATIBLE_URL` | Conditional | *(empty)* | OpenAI-compatible URL (required if provider=openai-compatible) |
 | `OAI_API_KEY` | Conditional | *(empty)* | API key for OpenAI-compatible provider |
 | `GOOGLE_API_KEY` | Conditional | *(empty)* | Google AI Studio API key (required if provider=google) |
-| `EMBED_MODEL` | No | `nomic-embed-text` | Embedding model name |
-| `EMBED_DIMENSIONS` | No | `1536` | Embedding dimensions (1536 for Qwen3 MRL, 768 for Google) |
+| `EMBED_MODEL` | No | `text-embedding-nomic-embed-text-v2` | Embedding model name (canonical 768d; opt-in `Qwen/Qwen3-Embedding-4B` 1536d via MRL) |
+| `EMBED_DIMENSIONS` | No | `768` | Embedding dimensions (canonical 768 Nomic; 1536 for Qwen3 MRL opt-in) |
 
 **LLM Brain config:**
 
@@ -637,12 +637,12 @@ services:
 
 ### Production Deployment
 
-For production on a VPS (e.g., 213.32.27.115):
+For production on a VPS (see the private runbook for the live address):
 
 ```bash
 # Clone, configure, deploy
-git clone https://github.com/alfirus/vectorizer.git /opt/vectorizer
-cd /opt/vectorizer
+git clone https://github.com/alfirus/vectorizer.git <server-app-dir>
+cd <server-app-dir>
 cp .env.example .env
 # Edit .env with production values
 docker compose up -d
@@ -686,9 +686,9 @@ Each workspace gets its own ChromaDB collection (`ws_<id>`). This provides:
 
 Tradeoff: more collections = slightly higher ChromaDB overhead. For 100+ agents, consider per-workspace sharding or a single collection with workspace_id metadata filtering.
 
-### Why chunk at 4000 chars?
+### Why chunk at 6000 chars?
 
-This is a conservative default that works well for most messages. Tradeoffs:
+`maxChunkSize` (6000) is a conservative server-side ceiling that works well for most messages. The vault indexer pre-chunks markdown at 3600–3800 chars so server chunking rarely re-splits vault content. Tradeoffs:
 - **Smaller chunks** → better precision in search but more documents to scan
 - **Larger chunks** → fewer documents but risk losing context boundaries
 
@@ -717,10 +717,10 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 ## 9. Future Roadmap
 
 ### Phase 1: Core Stability — done
-- [x] Message storage with embedding generation (1536d Qwen3 MRL, chunking, retry, deriver enqueue)
+- [x] Message storage with embedding generation (canonical 768d Nomic, chunking `maxChunkSize` 6000, retry, deriver enqueue)
 - [x] Semantic search with metadata filtering + hybrid RRF + `scope`/`peer_id`
 - [x] Optional LLM brain (summarize + ask, auto-fetch, SSE, `ChatWithHistory` tool loop)
-- [x] Docker Compose deployment (`chromadb:1.0.0` + `qwen-embed` vLLM `1536d`)
+- [x] Docker Compose deployment (`chromadb/chroma:1.0.0` canonical + `qwen-embed` vLLM 1536d opt-in profile)
 - [x] Workspace persistence (`ws_<id>` via Chroma, `EnsureCollection`)
 - [x] Session/message retrieval (`POST/GET /sessions`, `GET /messages`, `GET /messages/temporal`, `grep`, `Grep`)
 
@@ -742,7 +742,7 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] Auto-store chat answer into reasoning graph + assistant message (`CreateConclusion{source:chat}` + `AddReasoningEdge(premiseIDs, supportingMsgIDs)` + `AddMessage assistant` for continuity)
 
 ### Phase 4: Scale & Reliability — done
-- [x] Health check with ChromaDB `Heartbeat` (degraded if down, `version 0.3.0`)
+- [x] Health check with ChromaDB `Heartbeat` (degraded if down, `version.Version` single source — canonical `0.4.0`, P0-1)
 - [x] Graceful degradation (deriver queue + `3×` retry, `continue` on query error)
 - [x] Rate limiting (`10/s` token bucket per API key / JWT `w`, `429`, `isHealthOrMetrics`)
 - [x] Metrics (`/metrics` Prometheus, `vectorizer_messages_total`)
@@ -753,10 +753,10 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] Message TTL (`DELETE /workspaces/:id/ttl`, `TTL_HOURS`, `TTLDelete`)
 - [x] Cross-workspace search (deduped `Search` fan-out, `HybridSearch` fallback)
 - [x] Webhook notifications (`POST/GET /webhooks`, `DELETE /:id`, `GET /test`, `Fire`)
-- [x] Conclusions/representations (`POST/GET /conclusions`, `POST /conclusions/batch`, `POST /conclusions/query`, `ws_<id>_conclusions` 1536d, `GetRepresentation`)
-- [x] Peers + peer cards (`POST/GET /workspaces/:id/peers`, `PUT /workspaces/:id/peers/:peer_id`, `PUT/GET /peers/:peer_id/card`, `ws_<id>_peers`, `ws_<id>_peer_cards`)
+- [x] Conclusions/representations (`POST/GET /conclusions`, `POST /conclusions/batch`, `POST /conclusions/query`, `ws_<id>_conclusions` at configured dim, `GetRepresentation`)
+- [x] Peers + peer cards (`POST/GET /workspaces/:id/peers`, `PUT/GET /peers/:peer_id/card`, `ws_<id>_peers`, `ws_<id>_peer_cards`)
 - [x] JWT auth (`w/p/ad`, `AUTH_USE_AUTH`, `AUTH_JWT_SECRET`, `scripts/generate_jwt/main.go`)
-- [x] Layered config (`config.toml`, `env > .env > config.toml > defaults`, `BurntSushi/toml`, `EMBED_DIMENSIONS=1536`)
+- [x] Layered config (`config.toml`, `env > .env > config.toml > defaults`, `BurntSushi/toml`, canonical `EMBED_DIMENSIONS=768`, 1536 Qwen opt-in)
 - [x] Eval harness (`evals/run.go` `recall` + `reasoning-grounded` via `chat`, `evals/data/sample.jsonl`)
 - [x] Embedding model hot-swap without restart (`POST /admin/embedding {model, base_url, dimensions}`, `GET /admin/embedding`, `SetModel/SetDimensions`)
 - [x] gRPC interface alongside REST (`proto/vectorizer.proto` `AddMessage/Search/Chat/Health`, `vectorizerpb`, `internal/grpc`, `GRPC_PORT` 50051)

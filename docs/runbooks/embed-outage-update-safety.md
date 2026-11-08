@@ -73,7 +73,7 @@ t_382c7f47); the 503 guard fires before any of that is spent.
 
 ## Operator procedure during an embed outage
 
-1. Confirm: `ssh -i ~/.ssh/personal ubuntu@139.99.131.127 'curl -s http://127.0.0.1:8091/api/v1/health'`
+1. Confirm: `ssh -i ~/.ssh/personal ubuntu@<prod-server-ip> 'curl -s http://127.0.0.1:8091/api/v1/health'`
    — REST 8091 is loopback-only on the server (t_02943c82); there is no tailnet path and sshd
    direct-tcpip forwarding is disabled, so check health **on the server**. `embedding: degraded`
    plus `embedding_last_ok` older than ~1 min = real outage.
@@ -137,7 +137,7 @@ result in a struct, map or queue past the request without copying it.
 
 ## Deploying a fix to this service
 
-- Image builds from `/opt/vectorizer` via `./up.sh build vectorizer`
+- Image builds from `<server-app-dir>` via `./up.sh build vectorizer`
   (pins `docker-compose.server.yml` + live-only `docker-compose.override.yml`).
 - Go toolchain is not on the host: run `go vet` / `go test` in the build image, read-only module
   mode (`GOFLAGS=-mod=readonly`) — plain `go test -mod=mod` rewrites `go.mod`, and repo-wide

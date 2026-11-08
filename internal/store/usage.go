@@ -6,7 +6,7 @@ package store
 // Aggregated in-memory and served by GET /api/v1/usage/daily.
 //
 // Storage: $USAGE_LOG_PATH, else /data/ai/usage/usage.jsonl when that dir
-// is writable (persistent docker mount on ns539881), else ./data/usage.jsonl.
+// is writable (persistent docker mount on the prod host), else ./data/usage.jsonl.
 // If nothing is writable the tracker keeps counting in memory and warns once.
 
 import (

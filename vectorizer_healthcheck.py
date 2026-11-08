@@ -11,8 +11,10 @@ import urllib.request
 import urllib.error
 
 # ΓöÇΓöÇ Config ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-ENV_FILE = r"C:\Users\alfir\vectorizer\.env"
-ALERT_EMAIL = "alfirus@gmail.com"
+ENV_FILE = os.environ.get("VECTORIZER_ENV_FILE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".env"
+)
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL_TO", "ops@example.com")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -102,9 +104,11 @@ def docker_ps():
 
 def docker_compose_up():
     """Try to start containers via docker-compose."""
+    here = os.path.dirname(os.path.abspath(__file__))
     compose_paths = [
-        r"C:\Users\alfir\vectorizer\docker-compose.yml",
-        r"C:\Users\alfir\vectorizer\docker-compose.yaml",
+        os.environ.get("VECTORIZER_COMPOSE_FILE", ""),
+        os.path.join(here, "docker-compose.yml"),
+        os.path.join(here, "docker-compose.yaml"),
     ]
     for cp in compose_paths:
         if os.path.exists(cp):
