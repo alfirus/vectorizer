@@ -7,6 +7,10 @@ Stdio MCP proxy for Vectorizer REST (`/api/v1/*`, `X-API-Key`).
 
 ## Env
 `VECTORIZER_URL` (default `http://localhost:8091`), `VECTORIZER_API_KEY`, `VECTORIZER_WORKSPACE_ID` (optional default).
+`DASHBOARD_URL` (optional, e.g. `http://localhost:8092`) — enables `vault_list`, `vault_read`,
+`graph_build_status`, `graph_nodes` (dashboard HTTP API). When unset those tools return
+`{ ok:false, error:"DASHBOARD_URL not configured" }`. `usage_summary` / `usage_by_agent`
+talk to Vectorizer directly and don't need it.
 
 ## Run
 ```bash

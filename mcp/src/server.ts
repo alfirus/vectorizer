@@ -5,6 +5,9 @@ import { registerMessageTools } from "./tools/messages.js";
 import { registerBrainTools } from "./tools/brain.js";
 import { registerPeerTools } from "./tools/peers.js";
 import { registerCodeTools } from "./tools/code.js";
+import { registerVaultTools } from "./tools/vault.js";
+import { registerGraphTools } from "./tools/graph.js";
+import { registerUsageTools } from "./tools/usage.js";
 
 export function createServer(opts?: { agentName?: string }) {
   const server = new McpServer({ name: "@vectorizer/mcp", version: "0.2.0" });
@@ -18,5 +21,8 @@ export function createServer(opts?: { agentName?: string }) {
   registerBrainTools(server, getClient);
   registerPeerTools(server, getClient);
   registerCodeTools(server, getClient);
+  registerVaultTools(server, getClient);
+  registerGraphTools(server, getClient);
+  registerUsageTools(server, getClient);
   return server;
 }

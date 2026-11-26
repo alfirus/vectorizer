@@ -3,6 +3,8 @@ export type VectorizerConfig = {
   apiKey: string;
   workspaceId?: string;
   agentName?: string;
+  /** Optional dashboard base URL (e.g. http://localhost:8092) for vault/graph tools. */
+  dashboardUrl?: string;
 };
 
 export function parseConfig(): VectorizerConfig {
@@ -12,7 +14,11 @@ export function parseConfig(): VectorizerConfig {
   // Who is calling through this bridge (e.g. maisarah, mirza, balqis).
   // Surfaced in the dashboard as "Daily Usage By Agent" via X-Agent.
   const agentName = process.env.VECTORIZER_AGENT_NAME ?? process.env.AGENT_NAME;
-  return { baseUrl, apiKey, workspaceId, agentName };
+  // Optional dashboard base (vault/graph tools). Tools return
+  // { ok:false, error:"DASHBOARD_URL not configured" } when unset.
+  const dashboardRaw = (process.env.DASHBOARD_URL ?? "").replace(/\/$/, "");
+  const dashboardUrl = dashboardRaw ? dashboardRaw : undefined;
+  return { baseUrl, apiKey, workspaceId, agentName, dashboardUrl };
 }
 
 export function createClient(cfg: VectorizerConfig) {
