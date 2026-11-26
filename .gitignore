@@ -5,6 +5,10 @@
 # Environment
 .env
 
+# P1-4: dashboard desired-state schedules (mounted into the dashboard
+# container at /run/vectorizer-env/cron_schedules.json). Host-local only.
+cron_schedules.json
+
 # Build artifacts
 *.exe
 build/

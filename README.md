@@ -310,14 +310,21 @@ chmod 777 <server-app-dir>/vault-data/maisarah/vault/00-index/
 
 ## Cron Jobs
 
+Single canonical owner: **ubuntu's crontab on the host**, installed by
+`ops-cron/install.sh` (verified live on the server — see `ops-cron/README.md`).
+There is no reindex cron job (reindex is on-demand via the dashboard
+`/api/admin/reindex`, single-flight); the root-level `vectorizer_*.py` scripts
+are stale Windows-local files, not scheduler input.
+
 | Job | Schedule | Where | What |
 |-----|----------|-------|------|
-| `vectorizer-backup-daily` | `0 3 * * *` (03:00) | Hermes `origin` | `vectorizer_backup.py` → SSH `docker exec` tar of live `/data` in chromadb container → `<vault-backup-dir>/vectorizer/chroma-YYYY-MM-DD.tar.gz` + per-workspace `MEMORY_INDEX.<ws>` snapshots, prune `+7d` (real dir in private `.env` `VECTORIZER_BACKUP_DIR`) |
-| `vectorizer-health-1h` | `0 * * * *` (hourly) | Hermes `origin` | `vectorizer_healthcheck.py` probes `:8091/health` over Tailscale + `:8092/` and `:8102/heartbeat` via SSH; auto-heal = SSH `docker compose restart`, email alert |
+| `vectorizer-backup-daily` | `0 3 * * *` (03:00 UTC) | ubuntu crontab | `ops-cron/vectorizer-backup-daily.sh` → tar of the live chromadb volume + sqlite snapshot + config bundle under the host backup dir, prune `+7d` (real dir in private `.env` `VECTORIZER_BACKUP_DIR`) |
+| `vectorizer-health-1h` | `0 * * * *` (hourly) | ubuntu crontab | `ops-cron/vectorizer-health-1h.sh` probes `:8091/health` + chroma `:8102` + dashboard `:8092/` + mcp `:8093`, backup-freshness watchdog; auto-heal + email/Telegram alert |
 | `deriver` | `2s/5msg` ticker | Inside `vectorizer` | `Summarize("Extract 1-3 facts" + text[:8000]) → CreateConclusion + AddReasoningEdge` on `POST /messages` |
 | `dreamer` | `3h` ticker | Inside `vectorizer` | `ListWorkspaces→ListSessions→GetMessages(20)` surprisal `<0.15` skip → `CreateConclusion(source:dreamer)` |
 
-> Laptop `localhost:8091` is dead — nothing runs locally. Both Hermes scripts reach the server over Tailscale (`<tailnet-server-ip>`, SSH `ubuntu` + `~/.ssh/personal`).
+> Nothing runs on laptop `localhost:8091`. Both host jobs run on the server
+> itself (ubuntu crontab, SSH `ubuntu` + `~/.ssh/personal` for remote management).
 
 ## Configuration
 
@@ -582,8 +589,9 @@ How each client sets it:
   profiles: `headers: {X-Agent: <name>}` next to the `Authorization` bearer.
   Do NOT set `VECTORIZER_AGENT_NAME` on a shared bridge — one name there would
   misattribute everyone behind it.
-- **Dashboard** identifies as `X-Agent: dashboard`; `X-Source: dashboard` marks
-  the channel.
+- **Dashboard** identifies as `X-Agent: dashboard` on **every** backend call
+  (generic proxy, brain, activity, usage routes); `X-Source: dashboard` marks
+  the channel. The dashboard works with `REQUIRE_X_AGENT=true`.
 
 Names are normalized server-side: lowercase, letters/numbers/`-`/`_` only, max
 32 chars (`Shiela` → `shiela`). Calls with no header still work — they are

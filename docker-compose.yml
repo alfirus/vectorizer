@@ -100,6 +100,9 @@ services:
     env_file:
       - .env
     environment:
+      # Dashboard API gate (fail-closed 503 when unset). Also passable via
+      # env_file above — stated here so `docker compose config` shows it.
+      DASHBOARD_AUTH_TOKEN: ${DASHBOARD_AUTH_TOKEN:-}
       VECTORIZER_URL: http://vectorizer:8091
       VECTORIZER_API_KEY: ${VECTORIZER_API_KEY:-${DEFAULT_API_KEY:-}}
       CHROMA_URL: http://chromadb:8000
@@ -108,9 +111,18 @@ services:
       LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
       GRAPH_PATH: ${GRAPH_PATH:-/data/ai/vault/00-index/GRAPH.json}
       VAULT_ROOT: /data/ai
+      REINDEX_PYTHON: python3
+      # P1-4 settings/deploy wiring (mirrors docker-compose.server.yml — see
+      # the comments there). Local .env is dev-owned, so no `user:` override
+      # is needed here; the server file runs the service as uid/gid 1000.
+      SETTINGS_ENV_PATH: /run/vectorizer-env/.env
+      SETTINGS_SCHEDULES_PATH: /run/vectorizer-env/cron_schedules.json
+      REINDEX_SCRIPT_DIR: ${REINDEX_SCRIPT_DIR:-/data/ai/maisarah/vault/00-index}
     volumes:
       # Local vault mirror: set AI_DATA_DIR in .env (never commit the path).
       - "${AI_DATA_DIR:?set AI_DATA_DIR in .env (local vault mirror)}:/data/ai:ro"
+      # P1-4: live .env mount for dashboard settings read/write.
+      - ./.env:/run/vectorizer-env/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
