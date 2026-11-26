@@ -1,8 +1,9 @@
 # ADR 0005: v0.4.0 fail-closed auth + gRPC parity + per-route JWT scoping (retro)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-26
 **Authors:** Lina (Tech Lead — retroactive record of the shipped v0.4.0 change)
+**Accepted by:** Maisarah (Engineering Manager), 2026-11-26 — P1 batch review (kanban t_8304a3c1)
 
 ---
 
