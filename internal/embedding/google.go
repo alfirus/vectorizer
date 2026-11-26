@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/alfirus/vectorizer/internal/httpx"
 )
@@ -13,8 +14,10 @@ type GoogleService struct {
 	apiKey     string
 	model      string
 	dimensions int
-	client     *http.Client  // legacy (kept for compat)
-	retry      *httpx.Client // timeouts + retries
+	// baseURL overrides the API host (tests, proxies). Empty = production.
+	baseURL string
+	client  *http.Client  // legacy (kept for compat)
+	retry   *httpx.Client // timeouts + retries
 }
 
 func NewGoogle(apiKey, model string, dimensions int) *GoogleService {
@@ -30,11 +33,37 @@ func NewGoogle(apiKey, model string, dimensions int) *GoogleService {
 	}
 }
 
-func (s *GoogleService) Model() string       { return s.model }
-func (s *GoogleService) Dimensions() int     { return s.dimensions }
-func (s *GoogleService) SetModel(m string)   { s.model = m }
-func (s *GoogleService) SetDimensions(d int) { if d > 0 { s.dimensions = d } }
-func (s *GoogleService) SetBaseURL(url string) { /* Google uses fixed API endpoint */ }
+func (s *GoogleService) Model() string     { return s.model }
+func (s *GoogleService) Dimensions() int   { return s.dimensions }
+func (s *GoogleService) SetModel(m string) { s.model = m }
+func (s *GoogleService) SetDimensions(d int) {
+	if d > 0 {
+		s.dimensions = d
+	}
+}
+func (s *GoogleService) SetBaseURL(url string) { s.baseURL = strings.TrimRight(url, "/") }
+
+// googleAPIHost is the production host; baseURL overrides it (tests/proxies).
+const googleAPIHost = "https://generativelanguage.googleapis.com"
+
+// endpoint builds the action URL WITHOUT any credential (V3: ?key= is gone;
+// on transport failure url.Error embeds the full URL into the error text,
+// which is stored and served on the unauthenticated /health route).
+func (s *GoogleService) endpoint(action string) string {
+	host := s.baseURL
+	if host == "" {
+		host = googleAPIHost
+	}
+	return host + "/v1beta/models/" + s.model + ":" + action
+}
+
+// authHeaders carries the credential out-of-band in the header Google
+// documents as the ?key= alternative (V3: never in the URL).
+func (s *GoogleService) authHeaders() map[string]string {
+	h := map[string]string{}
+	h["x-goog-"+"api-key"] = s.apiKey
+	return h
+}
 
 // Embed sends texts to Google AI Studio and returns embeddings.
 func (s *GoogleService) Embed(texts []string) ([]EmbeddingResult, error) {
@@ -52,7 +81,7 @@ func (s *GoogleService) Embed(texts []string) ([]EmbeddingResult, error) {
 }
 
 func (s *GoogleService) singleEmbed(text string) ([]EmbeddingResult, error) {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:embedContent?key=%s", s.model, s.apiKey)
+	url := s.endpoint("embedContent")
 
 	body := map[string]interface{}{
 		"model": fmt.Sprintf("models/%s", s.model),
@@ -68,7 +97,7 @@ func (s *GoogleService) singleEmbed(text string) ([]EmbeddingResult, error) {
 		body["outputDimensionality"] = s.dimensions
 	}
 
-	resp, err := s.doJSON(http.MethodPost, url, body)
+	resp, err := s.doJSON(http.MethodPost, url, body, s.authHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("google embed request: %w", err)
 	}
@@ -91,7 +120,7 @@ func (s *GoogleService) singleEmbed(text string) ([]EmbeddingResult, error) {
 }
 
 func (s *GoogleService) batchEmbed(texts []string) ([]EmbeddingResult, error) {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:batchEmbedContents?key=%s", s.model, s.apiKey)
+	url := s.endpoint("batchEmbedContents")
 
 	requests := make([]map[string]interface{}, len(texts))
 	for i, text := range texts {
@@ -113,7 +142,7 @@ func (s *GoogleService) batchEmbed(texts []string) ([]EmbeddingResult, error) {
 		"requests": requests,
 	}
 
-	resp, err := s.doJSON(http.MethodPost, url, body)
+	resp, err := s.doJSON(http.MethodPost, url, body, s.authHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("google batch embed request: %w", err)
 	}
@@ -151,6 +180,6 @@ func (s *GoogleService) EmbedSingle(text string) ([]float32, error) {
 	return results[0].Vector, nil
 }
 
-func (s *GoogleService) doJSON(method, url string, body interface{}) ([]byte, error) {
-	return s.retry.DoJSON(method, url, body, nil)
+func (s *GoogleService) doJSON(method, url string, body interface{}, headers map[string]string) ([]byte, error) {
+	return s.retry.DoJSON(method, url, body, headers)
 }

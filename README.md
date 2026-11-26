@@ -673,7 +673,7 @@ vectorizer/
 │   │   ├── workflow_rerank.go  # WorkflowRerankScore (incl. LexTokens identifier-split BM25)
 │   │   ├── sections.go  # SpliceSections (H2 splice, whitespace-insensitive, idempotent)
 │   │   ├── query_metadata.go  # QueryByMetadata (no-embed filter lookup, used by code hash-skip)
-│   │   ├── reasoning.go, scopes.go, keys.go, conclusions.go, peers.go
+│   │   ├── reasoning.go, scopes.go, workspace_ops.go, conclusions.go, peers.go
 │   ├── codeindex/   # Codebase indexing (regex extractor go/py/ts, walk+hash-skip, CallEdges)
 │   │   ├── extractor.go, extractor_test.go, README.md
 │   ├── deriver/      # Async deriver 2s/5msg

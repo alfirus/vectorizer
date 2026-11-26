@@ -86,7 +86,7 @@ Vectorizer is a self-hosted semantic memory server for AI agents. It provides:
 | **Dreamer** | `internal/dreamer/` | Surprisal `3h` cron: `QueryConclusions` distance `<0.15` skip → `summarize→embed→ws_<id>_conclusions` (configured embed dim) |
 | **Webhooks** | `internal/webhooks/` | In-mem endpoint registry + `Fire` |
 | **gRPC** | `internal/grpc/` + `proto/vectorizer.proto` | `VectorizerService` (`AddMessage/Search/Chat/Health`) alongside REST `:50051` |
-| **Handlers** | `internal/handlers/` | Workspaces, messages (deriver Enqueue), sessions, peers, chat (agentic 5-tool loop), scopes, conclusions, keys, webhooks, brain, admin |
+| **Handlers** | `internal/handlers/` | Workspaces, messages (deriver Enqueue), sessions, peers, chat (agentic 5-tool loop), scopes, conclusions, webhooks, brain, admin |
 | **MCP** | `mcp/` | Stdio MCP proxy (`@modelcontextprotocol/sdk`, 13 tools) |
 | **Main** | `main.go` | Wiring, deriver start/stop, JWT/X-API-Key auth, rate limit, health/metrics, gRPC, dreamer cron |
 
@@ -761,7 +761,7 @@ The `/brain/summarize` and `/brain/ask` endpoints accept `workspace_id` and `ses
 - [x] Embedding model hot-swap without restart (`POST /admin/embedding {model, base_url, dimensions}`, `GET /admin/embedding`, `SetModel/SetDimensions`)
 - [x] gRPC interface alongside REST (`proto/vectorizer.proto` `AddMessage/Search/Chat/Health`, `vectorizerpb`, `internal/grpc`, `GRPC_PORT` 50051)
 - [x] Scopes (`ws_<id>_scopes`, `POST/GET /workspaces/:id/scopes`, `POST/:scope_id/sessions`, `DELETE/:scope_id/sessions/:sid`, `GET/:scope_id/status`)
-- [x] Keys (`POST/GET /workspaces/:id/keys`, `POST/GET /keys`, `sk_*`)
+- [x] ~~Keys (`POST/GET /workspaces/:id/keys`, `POST/GET /keys`, `sk_*`)~~ — REMOVED (R2 V1, 2026-11-26): minted keys were never verified by auth (process-local map, no expiry/persistence); endpoints deleted rather than shipped half-working
 
 ### Phase 6: Provider Abstraction — done
 - [x] Embedder interface (`internal/embedding/interface.go`) — `Embedder` contract for all providers, callers never reference concrete types

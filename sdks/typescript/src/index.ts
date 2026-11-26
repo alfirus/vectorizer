@@ -84,9 +84,6 @@ export class Vectorizer {
   async scopeRemoveSession(workspace_id: string, scope_id: string, session_id: string){ return this.req(`/api/v1/workspaces/${encodeURIComponent(workspace_id)}/scopes/${encodeURIComponent(scope_id)}/sessions/${encodeURIComponent(session_id)}`,{method:"DELETE"});}
   async scopeSessions(workspace_id: string, scope_id: string){ return this.req(`/api/v1/workspaces/${encodeURIComponent(workspace_id)}/scopes/${encodeURIComponent(scope_id)}/sessions`);}
   async scopeStatus(workspace_id: string, scope_id: string){ return this.req(`/api/v1/workspaces/${encodeURIComponent(workspace_id)}/scopes/${encodeURIComponent(scope_id)}/status`);}
-  // -- keys --
-  async createKey(workspace_id?: string, name?: string){ const body:{workspace_id?:string;name?:string}={}; if(workspace_id) body.workspace_id=workspace_id; if(name) body.name=name; return workspace_id ? this.req(`/api/v1/workspaces/${encodeURIComponent(workspace_id)}/keys`,{method:"POST",body:JSON.stringify(body)}) : this.req("/api/v1/keys",{method:"POST",body:JSON.stringify(body)});}
-  async listKeys(workspace_id?: string){ return workspace_id ? this.req(`/api/v1/workspaces/${encodeURIComponent(workspace_id)}/keys`) : this.req("/api/v1/keys");}
   // -- admin / webhooks / brain --
   async getEmbedding(){ return this.req("/api/v1/admin/embedding");}
   async setEmbedding(opts:{model?:string;base_url?:string}){ return this.req("/api/v1/admin/embedding",{method:"POST",body:JSON.stringify(opts)});}

@@ -3,11 +3,29 @@ package store
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sync/atomic"
 	"time"
 
 	"github.com/alfirus/vectorizer/internal/embedding"
 )
+
+// keyParam hunts query-string / form-style secrets (Google's ?key=, tokens,
+// signatures) so a transport error that embeds the request URL can never
+// carry a live credential into the probe store — and from there into the
+// unauthenticated /health output (V3).
+var keyParam = regexp.MustCompile(`(?i)([?&](?:key|api[_-]?key|token|signature|sig|auth)[=:])([^&\s"';]+)`)
+
+// ScrubError redacts credential-bearing query parameters from an error
+// string before it is stored or served. Applied at the single choke point
+// (probeOnce) AND again where /health renders, so a missed caller cannot
+// reintroduce the leak.
+func ScrubError(s string) string {
+	if s == "" {
+		return ""
+	}
+	return keyParam.ReplaceAllString(s, "${1}REDACTED")
+}
 
 // EmbeddingProbe is the last observed state of the embedding provider.
 //
@@ -148,7 +166,10 @@ func probeOnce(embed embedding.Embedder, timeout time.Duration) EmbeddingProbe {
 	select {
 	case o := <-ch:
 		if o.err != nil {
-			return EmbeddingProbe{Status: "degraded", LastErr: o.err.Error(), CheckedAt: now}
+			// V3: the error may embed the request URL (Go's url.Error
+			// carries the full URL) — scrub before storing, since the
+			// stored text is served on the unauthenticated /health route.
+			return EmbeddingProbe{Status: "degraded", LastErr: ScrubError(o.err.Error()), CheckedAt: now}
 		}
 		return EmbeddingProbe{Status: "ok", LastOK: now, CheckedAt: now}
 	case <-time.After(timeout):
