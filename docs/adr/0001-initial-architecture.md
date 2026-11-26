@@ -1,9 +1,10 @@
 # ADR 0001: Go service + ChromaDB + vault mirror (initial architecture)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-26
 **Authors:** Lina (Tech Lead — reconstructed; the original decision was never
 recorded, numbering started at 0002)
+**Accepted by:** Maisarah (Engineering Manager), 2026-11-26 — P1 batch review (kanban t_8304a3c1)
 
 ---
 
