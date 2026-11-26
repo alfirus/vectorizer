@@ -112,6 +112,46 @@ Config restore: extract `vectorizer-config-<date>.tar.gz` over `<server-app-dir>
   after the drill (verified clean)
 - backup footprint is now 4.1 G total under 7-day retention (task text "698M" was stale)
 
+## Off-host replication (t_d7130e95, vault-data t_6d2db280)
+
+`vectorizer-offhost-sync.sh` copies each night's artifacts to the office
+Synology NAS via **restic-over-ssh** (repo + credentials root-owned 0600 —
+paths live in the private runbook, never here). It runs as step **5b inside
+the 03:00 slot** (called by `vectorizer-backup-daily.sh` *after* local
+artifacts are written + verified — no second schedule), as root via the
+narrow sudoers drop-in that `install.sh` manages
+(`/etc/sudoers.d/vectorizer-offhost`, validated with `visudo -c`).
+
+- **Not provisioned yet → SKIP green** (exit 0; the freshness alert on the
+  `offhost-last-success` marker is what pages when stale).
+- **Provisioned → restic backup** of `chroma-volume-<date>.tar.gz`,
+  `chroma-sqlite-<date>.db`, `vectorizer-config-<date>.tar.gz`, **plus the
+  vault data dir when `VAULT_DATA_DIR` names an existing directory**
+  (~11 G markdown truth — restic dedups, so the nightly delta after the
+  first snapshot is small). Unset/absent → logged `VAULT-SKIP`.
+- Every snapshot carries the stable tag **`vectorizer-offhost`** (plus the
+  dated tag); **retention `forget --keep-daily 7 --prune` filters on the
+  stable tag after success**. (Pre-stable-tag snapshots need one manual
+  forget: `restic forget --keep-daily 7 --prune --tag vectorizer-<old-date>`
+  per snapshot, or one unfiltered `forget --keep-daily 7`.)
+- Failure after provisioning → non-zero exit → `VectorizerBackupFailed`.
+
+## RPO / RTO (from the drills below)
+
+- **RPO 24 h scheduled, 26 h paged.** Nightly 03:00 UTC backup; staleness is
+  watched two ways: the hourly probe fires `VectorizerBackupStale` when no
+  archive is newer than 26 h, and a job failure fires `VectorizerBackupFailed`
+  immediately. Worst case data loss: one day of vectors + vault delta.
+- **RTO < 1 h operator time.** Both drills (2026-10-05, 2026-10-14) restored
+  by extracting the volume tarball, swapping in the `VACUUM INTO` sqlite
+  snapshot, and starting a scratch Chroma 1.0.0 on loopback — collection
+  sets byte-identical (`live=119/restored=119` on 10-05,
+  `live=121/restored=121` on 10-14), per-collection counts matched, filtered
+  reads answered. No full production-failover drill has been run — that is
+  the next restore exercise, not a gap in the nightly path.
+- Off-host restores are the same procedure with `restic restore` first
+  (NAS → local), adding only download time.
+
 ## Known limitations / follow-ups
 
 - **Open finding (2026-10-05, not caused by this job):** the *live* chromadb fails
@@ -122,11 +162,15 @@ Config restore: extract `vectorizer-config-<date>.tar.gz` over `<server-app-dir>
   (Affected collection IDs are recorded in the follow-up card.)
   Follow-up: card t_d1b3b72e.
 
-- **Same-host only.** The backup sits on the same 1.8 T disk as the live volume; it protects
-  against app-level corruption, bad migrations and accidental drops, **not** disk/host loss.
-  Off-host replication (rsync is installed, no remote endpoint configured) is a separate
-  decision — follow-up: card t_87d57b8f (triage).
-- `<server-app-dir>/vault-data` (11 G) and the git repo history are **not** part of this backup.
+- **Same-host only for the local copies.** The nightly backup sits on the same
+  1.8 T disk as the live volume; it protects against app-level corruption,
+  bad migrations and accidental drops, **not** disk/host loss. Host-loss
+  cover is the off-host replication above (restic-over-ssh to the office
+  NAS, step 5b) — follow-up card t_87d57b8f stays open until the repo is
+  provisioned and the first `offhost OK` marker lands.
+- The vault data dir (~11 G) is not part of the *local* 7-day bundle (disk
+  budget); off-host it is included whenever `VAULT_DATA_DIR` is set (see
+  above). The git history of the vault is a second, independent copy.
 - Retention is 7 days (measured ≈ 500 MB/day → ~3.5 GB of disk for backups; the 160 MB
   daily archive is 4.97 GB uncompressed).
 - `<server-app-dir>/vectorizer_backup.py` and `vectorizer_healthcheck.py` are stale

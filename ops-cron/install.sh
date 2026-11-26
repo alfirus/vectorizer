@@ -46,6 +46,36 @@ EOF
 fi
 crontab -l | grep -A2 -B1 "vectorizer-ops" || true
 
+echo "== off-host replication (t_d7130e95 + t_6d2db280) =="
+if command -v restic >/dev/null; then
+  echo "restic present: $(restic version | head -n 1)"
+else
+  echo "restic NOT installed — off-host sync stays SKIP-green until it is"
+  echo " (owner action: sudo apt install restic, then provision /root/.restic/)"
+fi
+SUDOERS_DROP=/etc/sudoers.d/vectorizer-offhost
+if [ -f "$SUDOERS_DROP" ]; then
+  echo "sudoers drop-in already present ($SUDOERS_DROP) — untouched"
+else
+  echo "installing sudoers drop-in for the nightly off-host call (backup-daily runs sudo -n as ubuntu)"
+  printf 'ubuntu ALL=(root) NOPASSWD: %s/vectorizer-offhost-sync.sh *\n' "$OPS" | sudo tee "$SUDOERS_DROP" >/dev/null
+  sudo chmod 0440 "$SUDOERS_DROP"
+  if sudo visudo -c -f "$SUDOERS_DROP" >/dev/null; then
+    echo "sudoers drop-in installed + validated"
+  else
+    echo "sudoers validation FAILED — removing drop-in, fix manually"
+    sudo rm -f "$SUDOERS_DROP"
+    exit 1
+  fi
+fi
+if sudo test -f /root/.restic/vectorizer-offhost.env 2>/dev/null; then
+  echo "off-host repo provisioned (env file present)"
+else
+  echo "off-host repo NOT provisioned — sync logs SKIP (green) until it is"
+  echo " (owner action, private runbook: DSM share + svc user, repo passphrase in"
+  echo "  /root/.restic/vectorizer-offhost.env, VAULT_DATA_DIR for the ~11G vault)"
+fi
+
 echo "== sanity: shell syntax =="
 for f in "$OPS"/*.sh; do bash -n "$f" && echo "OK $f"; done
 
