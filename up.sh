@@ -127,6 +127,13 @@ verify() {
     || { echo "VERIFY-FAIL: VAULT_WRITEBACK=true missing on vectorizer" >&2; fail=1; }
   echo "--- verify: on-host REST health ---"
   curl -s -m 10 http://127.0.0.1:8091/api/v1/health | head -c 400 || true; echo
+  echo "--- verify: dashboard settings wiring (expect .env -> /run/vectorizer-env/.env) ---"
+  docker inspect vectorizer-dashboard --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' 2>/dev/null | grep -qF -- "-> /run/vectorizer-env/.env" \
+    || { echo "VERIFY-FAIL: dashboard .env mount missing (-> /run/vectorizer-env/.env)" >&2; fail=1; }
+  docker inspect vectorizer-dashboard --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -q '^SETTINGS_ENV_PATH=/run/vectorizer-env/.env$' \
+    || { echo "VERIFY-FAIL: SETTINGS_ENV_PATH missing on dashboard" >&2; fail=1; }
+  [[ -f "${APP_DIR}/.env" ]] \
+    || { echo "VERIFY-FAIL: ${APP_DIR}/.env missing (dashboard mount source)" >&2; fail=1; }
   echo "--- verify: tailnet MCP health (fleet path, 60s retry for post-recreate start) ---"
   local i
   for i in 1 2 3 4 5 6; do

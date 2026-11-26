@@ -101,8 +101,16 @@ services:
     container_name: vectorizer-dashboard
     ports:
       - "127.0.0.1:8092:8092"
+    # P1-4: run as the host owner (uid/gid 1000 = ubuntu) so the mounted
+    # vectorizer .env (mode 600 ubuntu:ubuntu) is readable/writable.
+    # The image-default nextjs user (uid 1001) would get EACCES on the mount.
+    user: "1000:1000"
     environment:
       PORT: 8092
+      # Dashboard API gate (fail-closed 503 when unset). Committed here after
+      # running as an uncommitted server hot-edit — the token value itself
+      # lives only in the private .env.
+      DASHBOARD_AUTH_TOKEN: ${DASHBOARD_AUTH_TOKEN:?set DASHBOARD_AUTH_TOKEN in the private .env}
       VECTORIZER_URL: http://vectorizer:8091
       VECTORIZER_API_KEY: ${DEFAULT_API_KEY}
       CHROMA_URL: http://chromadb:8000
@@ -114,8 +122,22 @@ services:
       # Vault graph location differs per install: private .env only.
       GRAPH_PATH: ${GRAPH_PATH:?set GRAPH_PATH in the private .env}
       REINDEX_PYTHON: python3
+      # P1-4 settings/deploy wiring: the dashboard container has no vectorizer
+      # checkout, so the live .env is shared by file mount (see volumes below
+      # and dashboard README "Docker settings"). Writes need a vectorizer
+      # recreate to take effect (the vectorizer reads .env once at create).
+      SETTINGS_ENV_PATH: /run/vectorizer-env/.env
+      SETTINGS_SCHEDULES_PATH: /run/vectorizer-env/cron_schedules.json
+      # Explicit index-script location (code falls back to VAULT_ROOT-based
+      # lookup when unset). Override in the private .env when scripts move.
+      REINDEX_SCRIPT_DIR: ${REINDEX_SCRIPT_DIR:-/data/ai/maisarah/vault/00-index}
     volumes:
       - ${VAULT_DATA_DIR:?set VAULT_DATA_DIR in the private .env}:/data/ai
+      # P1-4: live .env mount for dashboard settings read/write. The source
+      # file must exist (it always does — the vectorizer service requires it);
+      # a missing source makes compose create a directory here and breaks
+      # settings reads. up.sh verify checks the file exists.
+      - ./.env:/run/vectorizer-env/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

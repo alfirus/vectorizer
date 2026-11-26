@@ -87,29 +87,26 @@ Config restore: extract `vectorizer-config-<date>.tar.gz` over `<server-app-dir>
 
 ### Drill result (2026-10-05, `restore-drill-v2.sh`, archive `chroma-volume-2026-10-04`)
 
-- extracted 4.7 G, swapped in `chroma-sqlite-2026-10-04.db`, started a scratch chroma on
+- extracted 4.7 G, swapped in the sqlite snapshot, started a scratch chroma on
   `127.0.0.1:8199` — came up, `HTTP 200`, version 1.0.0
 - collection sets: `live=119 restored=119 identical_set=yes` (id + name, byte-identical JSON)
-- counts by UUID: `ws_code_aict_codeedges 17016=17016`, `ws_code_ags 8358=8358`,
-  `ws_code_vectorizer 4063=4063`, `ws_alya_conclusions 378=378`, `ws_code_aict 637=637`
-  (a 6th sample, `probe-content-only`, errored on the **live** instance during the drill —
-  see the compactor finding below — while the restored copy answered `637`)
-- filtered read on the restored sidecar (`where workspace_id=code_aict`): 3 rows with
-  documents, `calls:get_api_key` — i.e. restored data is queryable, not just present
+- per-collection document counts matched live for the full sampled set (one
+  sample errored on the **live** instance during the drill — the compactor
+  fault class below — while the restored copy answered normally)
+- filtered read on the restored sidecar (`where workspace_id=<sample>`, 3 rows
+  with `calls:get_api_key`): restored data is queryable, not just present
 - restored sqlite: 55,605 embedding rows = live
 
 ### Drill result (2026-10-14, `restore-drill-v2.sh`, archive `chroma-volume-2026-10-14`, run for t_79c254ce)
 
-- extracted 1.8 G, swapped in `chroma-sqlite-2026-10-14.db`, scratch chroma on
+- extracted 1.8 G, swapped in the sqlite snapshot, scratch chroma on
   `127.0.0.1:8199` — came up, `HTTP 200`
 - collection sets: `live=121 restored=121 identical_set=yes` (id + name)
-- counts by UUID: `ws_code_ags 8358=8358`, `ws_code_vectorizer 4063=4063`,
-  `probe-content-only 637=637`, `ws_alya_conclusions 693=693`,
-  `ws_code_aict 637=637` MATCH; `ws_code_aict_codeedges` restored `17016`
-  while live errored mid-drill, then answered `17016` on immediate re-check
-  (transient under drill load — same compactor/backfill fault class as the
-  2026-10-05 open finding, not a backup defect)
-- filtered read on the restored sidecar (`where workspace_id=code_aict`): 3 rows,
+- per-collection document counts MATCHED live across the sampled set; one
+  collection errored on live mid-drill, then answered normally on immediate
+  re-check (transient under drill load — same compactor/backfill fault class as
+  the 2026-10-05 open finding, not a backup defect)
+- filtered read on the restored sidecar (`where workspace_id=<sample>`, 3 rows,
   `calls:get_api_key` — READ_CHECK=OK
 - restored sqlite: 62,762 embedding rows; scratch container + workdir removed
   after the drill (verified clean)
@@ -118,18 +115,17 @@ Config restore: extract `vectorizer-config-<date>.tar.gz` over `<server-app-dir>
 ## Known limitations / follow-ups
 
 - **Open finding (2026-10-05, not caused by this job):** the *live* chromadb fails
-  `count`/`get` on 9 of 119 collections with
+  `count`/`get` on 9 collections with
   `InternalError: Error executing plan: Error sending backfill request to compactor` —
-  `ws_t7c_e2e_1791148918`, `ws_t7c_e2e_1791149995`, `ws_t7c_e2e_1791150607`,
-  `ws_t7c_probe_2788`, `t7c_probe3_10484`, `probe-content-only`, `probe-content-l2`,
-  `ws_probe`, `ws__global`. The identical collections served from the restored snapshot
-  answer normally, so the on-disk data is fine and the fault is live service state.
-  Follow-up: t_d1b3b72e (@nadia).
+  the identical collections served from the restored snapshot answer normally,
+  so the on-disk data is fine and the fault is live service state.
+  (Affected collection IDs are recorded in the follow-up card.)
+  Follow-up: card t_d1b3b72e.
 
 - **Same-host only.** The backup sits on the same 1.8 T disk as the live volume; it protects
   against app-level corruption, bad migrations and accidental drops, **not** disk/host loss.
   Off-host replication (rsync is installed, no remote endpoint configured) is a separate
-  decision — follow-up: t_87d57b8f (@maisarah, triage).
+  decision — follow-up: card t_87d57b8f (triage).
 - `<server-app-dir>/vault-data` (11 G) and the git repo history are **not** part of this backup.
 - Retention is 7 days (measured ≈ 500 MB/day → ~3.5 GB of disk for backups; the 160 MB
   daily archive is 4.97 GB uncompressed).

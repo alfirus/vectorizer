@@ -19,11 +19,14 @@ services:
       VAULT_WRITEBACK: "true"
     volumes:
       # Live repo + code-stage checkouts (read-only inside the container).
-      - /opt/vectorizer:/data/repo:ro
-      - /opt/code-stage:/data/code-stage:ro
+      # Placeholders — fill in the real host paths in the untracked copy.
+      - <server-app-dir>:/data/repo:ro
+      - <code-stage-dir>:/data/code-stage:ro
 
   vectorizer-mcp:
     ports:
       # Loopback + tailnet ONLY — never a bare public bind.
+      # Fail-closed: no default IP is baked in (a stale default would bind
+      # the wrong interface). up.sh verify requires the real value.
       - "127.0.0.1:8093:8093"
-      - "${TAILNET_MCP_IP:-100.90.123.105}:8093:8093"
+      - "${TAILNET_MCP_IP:?set TAILNET_MCP_IP in docker-compose.override.yml}:8093:8093"
