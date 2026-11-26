@@ -9,12 +9,20 @@
 # Behaviour:
 #   - repo/creds not provisioned yet -> log SKIP, exit 0 (nightly stays green; the
 #     freshness alert on the last-success marker is what pages when stale).
-#   - provisioned -> restic backup of exactly the three dated artifacts, then
-#     `forget --keep-daily 7 --prune` ONLY after a successful backup.
+#   - provisioned -> restic backup of the three dated artifacts, PLUS the vault
+#     data dir when VAULT_DATA_DIR names an existing directory (t_6d2db280:
+#     markdown truth is the only copy of curated knowledge; restic dedups it so
+#     the nightly delta after the first snapshot is small). Unset/absent ->
+#     logged VAULT-SKIP, local-only behaviour unchanged.
+#   - every snapshot carries the stable tag `vectorizer-offhost` (plus the
+#     dated tag); retention `forget --keep-daily 7` filters on the stable tag
+#     ONLY after a successful backup. Snapshots written before the stable tag
+#     existed need one manual forget (see ops-cron/README.md).
 #   - any failure after provisioning -> non-zero exit (daily job fires
 #     VectorizerBackupFailed). Never prints secrets: the repo password is passed
 #     by file reference only and this script runs with tracing off.
-# Out of scope (never included): <server-data-dir> (11 GB).
+# Server-private paths (repo URL, VAULT_DATA_DIR) live in the root-owned env
+# file / private runbook — never in this repo.
 set -uo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
@@ -50,9 +58,18 @@ for f in "$VOL_TAR" "$SQLITE_DB" "$CFG_TAR"; do
 done
 gzip -t "$VOL_TAR" || { log "FAIL date=$DATE reason=vol-tarball-corrupt"; echo "offhost FAIL (tarball corrupt)"; exit 1; }
 
+# --- backup set: three dated artifacts + optional vault data -----------------------
+BACKUP_SET=("$VOL_TAR" "$SQLITE_DB" "$CFG_TAR")
+if [ -n "${VAULT_DATA_DIR:-}" ] && [ -d "$VAULT_DATA_DIR" ]; then
+  BACKUP_SET+=("$VAULT_DATA_DIR")
+  log "OK date=$DATE vault=included($VAULT_DATA_DIR)"
+else
+  log "SKIP date=$DATE reason=vault-not-included (VAULT_DATA_DIR unset or not a dir)"
+fi
+
 # --- backup (content-addressed: re-runs upload only missing blobs -> resumable) -----
-OUT=$(restic -r "$RESTIC_REPOSITORY" backup --tag "vectorizer-$DATE" \
-  "$VOL_TAR" "$SQLITE_DB" "$CFG_TAR" 2>&1) || {
+OUT=$(restic -r "$RESTIC_REPOSITORY" backup --tag "vectorizer-$DATE" --tag vectorizer-offhost \
+  "${BACKUP_SET[@]}" 2>&1) || {
   log "FAIL date=$DATE reason=restic-backup-exit-nonzero out=$(echo "$OUT" | tail -n 3 | tr '\n' ';')"
   echo "offhost FAIL (restic backup)"
   exit 1
@@ -61,7 +78,9 @@ SNAP=$(echo "$OUT" | grep -oE 'snapshot [0-9a-f]+ saved' | awk '{print $2}' || t
 ADDED=$(echo "$OUT" | grep -oE 'Added to the repository: [^,]+' | head -n 1 || true)
 
 # --- retention AFTER success only (7 days, matching the local job) ------------------
-restic -r "$RESTIC_REPOSITORY" forget --keep-daily 7 --prune --tag vectorizer >/dev/null 2>&1 \
+# Filters on the stable tag (t_6d2db280): the old `--tag vectorizer` filter
+# matched nothing because snapshots carry dated tags (vectorizer-<date>).
+restic -r "$RESTIC_REPOSITORY" forget --keep-daily 7 --prune --tag vectorizer-offhost >/dev/null 2>&1 \
   || log "WARN date=$DATE reason=forget-prune-failed (backup itself succeeded)"
 
 # --- marker (atomic; freshness alert in vectorizer-health-1h depends on this) ---------

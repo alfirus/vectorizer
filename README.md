@@ -1,5 +1,10 @@
 # Vectorizer — Semantic Memory Server
 
+[![CI](https://github.com/alfirus/vectorizer/actions/workflows/ci.yml/badge.svg)](https://github.com/alfirus/vectorizer/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/alfirus/vectorizer)](https://github.com/alfirus/vectorizer/tags)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![ChromaDB](https://img.shields.io/badge/ChromaDB-1.0.0-orange)](https://github.com/chroma-core/chroma)
+
 A lightweight, self-hosted memory server for AI agents. Stores messages as embeddings in ChromaDB with optional LLM-powered summarization and Q&A. Each agent gets isolated memory via workspace namespaces.
 
 Now with **markdown vault + file-graph + workflow librarian** — truth is markdown, vector is a fingerprint beside it, 768d is enough when you have good metadata.
@@ -8,6 +13,8 @@ Now with **markdown vault + file-graph + workflow librarian** — truth is markd
 
 - **[Architecture Blueprint](docs/BLUEPRINT.md)** — full system design, data flows, API contract, config schema, deployment topology
 - **This README** — quick start guide and usage reference
+- **[demo/](demo/)** — one-command local stack + sample vault + seed script (fresh-clone friendly)
+- **[Sharing prep](docs/sharing-prep.md)** — awesome-selfhosted entry + launch post drafts
 
 ## Features
 
@@ -50,6 +57,19 @@ Vault pipeline (paths are examples — real roots live in private `.env`):
                         → POST /messages/batch {metadata: 11 fields + entities}
                         → Chroma ws_family 768d cosine + GRAPH.json (chunk→doc→entity→folder)
                         → POST /messages/search → vector top-k → graph 1-hop → WorkflowRerankScore → top3
+```
+
+### System diagram
+
+```mermaid
+flowchart LR
+    A["Agent / Dashboard / MCP"] -->|"REST :8091/api/v1<br/>X-API-Key + X-Agent"| V["Vectorizer (Go/Fiber)"]
+    V -->|"vectors + metadata"| C["ChromaDB 1.0.0<br/>ws_* collections, 768d cosine"]
+    V -->|"embed / chat"| E["Embedding + LLM<br/>LM Studio (Nomic 768d, primary)<br/>vLLM Qwen3-Embedding-4B (opt-in)<br/>Google text-embedding (opt-in)"]
+    V -->|"vault writeback"| F["Markdown vault<br/>(git-backed truth)<br/>MEMORY_INDEX.json + GRAPH.json"]
+    F -->|"vault_index.py<br/>chunk + tag + entities"| V
+    D["Dashboard :8092<br/>(Next.js, server-only secrets)"] -->|"proxied /api/vectorizer"| V
+    M["MCP server :8093<br/>(25 tools)"] --> V
 ```
 
 ## Quick Start
@@ -137,6 +157,49 @@ curl http://<tailnet-server-ip>:8091/api/v1/health
 python3 scripts/vault_index.py --workspace maisarah
 python3 scripts/graph_build.py
 ```
+
+## API in Action
+
+Four calls that show the whole loop (key passed via env so it never lands in
+shell history — screenshots of the same flow against the demo stack are in
+[`demo/`](demo/)):
+
+```bash
+export VZ=http://localhost:8091/api/v1
+export KEY="$VECTORIZER_API_KEY"   # demo stack default: see demo/README.md
+
+# 1. Health — no auth required, reports chroma + embedding status
+curl -s $VZ/health | jq '{status, chromadb, embedding_model, embedding}'
+# {"status":"ok","chromadb":"ok",
+#  "embedding_model":"text-embedding-nomic-embed-text-v2","embedding":"ok"}
+
+# 2. Create a workspace (names canonicalize to ws_<id>; POSTing twice is safe)
+curl -s -X POST $VZ/workspaces \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"name":"acme"}' | jq '{id, name}'
+# {"id":"ws_acme","name":"acme"}
+
+# 3. Store one memory (session_id groups turns; embedding must be healthy —
+#    /health reports "embedding":"ok", else the call fails fast with 503 + retry hint)
+curl -s -X POST $VZ/messages \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"workspace_id":"acme","session_id":"acme-seed-01","role":"user",
+       "content":"Acme press brake needs blade replacement every 4000 cycles"}' \
+  | jq '{id, workspace_id, stored}'
+# {"id":"msg_9f3a…","workspace_id":"ws_acme","stored":true}
+
+# 4. Hybrid search — vector + BM25 fusion, workflow rerank, honest `source`
+curl -s -X POST "$VZ/workspaces/acme/search" \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"query":"press brake maintenance interval","n_results":3}' \
+  | jq '.results[] | {score, source, snippet: .document[0:80]}'
+# {"score":0.91,"source":"hybrid",
+#  "snippet":"Acme press brake needs blade replacement every 4000 cycles"}
+```
+
+`source` is `hybrid` when keyword hits fused with vector results, and
+`semantic-fallback` when only pure-vector results exist — the API tells you
+which it was. Full contract: [docs/BLUEPRINT.md](docs/BLUEPRINT.md) + `## API Reference` below.
 
 ## Vault — Markdown as Source of Truth
 

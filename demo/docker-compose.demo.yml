@@ -1,0 +1,69 @@
+# Minimal local demo stack — ChromaDB + Vectorizer with sample vault data.
+#
+# Run from the REPO ROOT (paths below are relative to this file):
+#   docker compose -f demo/docker-compose.demo.yml up -d --build
+#   ./demo/seed.sh
+#
+# Loopback-only ports. Stop your dev stack first if it already holds
+# 8091/8100, or override:  PORT=8099 CHROMA_PORT=8109 docker compose ...
+#
+# Embeddings need an OpenAI-compatible endpoint (default: LM Studio on the
+# host at http://host.docker.internal:1234/v1 with model
+# text-embedding-nomic-embed-text-v2). Without one, the stack still starts,
+# /health reports embedding "degraded", and seed.sh runs everything that
+# does not need embeddings (workspace create, dry-run index preview).
+services:
+  chromadb:
+    image: chromadb/chroma:1.0.0
+    container_name: vectorizer-demo-chromadb
+    ports:
+      - "127.0.0.1:${CHROMA_PORT:-8100}:8000"
+    volumes:
+      - demo_chroma_data:/data
+    environment:
+      IS_PERSISTENT: "TRUE"
+      CHROMA_SERVER_HOST: 0.0.0.0
+      CHROMA_SERVER_HTTP_PORT: 8000
+    restart: "no"
+
+  vectorizer:
+    build: ..
+    container_name: vectorizer-demo
+    ports:
+      - "127.0.0.1:${PORT:-8091}:${PORT:-8091}"
+    environment:
+      PORT: ${PORT:-8091}
+      # Demo-only key. The server is fail-closed without auth material;
+      # this keeps the one-command demo working on loopback. Never reuse
+      # this value anywhere real.
+      DEFAULT_API_KEY: demo-key-change-me
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      EMBED_PROVIDER: openai-compatible
+      EMBED_MODEL: text-embedding-nomic-embed-text-v2
+      EMBED_DIMENSIONS: 768
+      OAI_COMPATIBLE_URL: http://host.docker.internal:1234/v1
+      OAI_API_KEY: lm-studio
+      LM_STUDIO_URL: http://host.docker.internal:1234/v1
+      LM_STUDIO_API_KEY: lm-studio
+      LLM_ENABLED: "false"
+      LIBRARIAN_MODE: workflow
+      TTL_HOURS: 0
+    volumes:
+      # Sample vault (read-only): /data/ai/acme/vault/*.md
+      - ./vault:/data/ai:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      chromadb:
+        condition: service_started
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8091}/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  demo_chroma_data:
