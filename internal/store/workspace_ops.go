@@ -1,49 +1,13 @@
 package store
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/alfirus/vectorizer/internal/models"
 )
-
-type APIKey struct {
-	ID          string `json:"id"`
-	WorkspaceID string `json:"workspace_id"`
-	Prefix      string `json:"prefix"`
-	CreatedAt   string `json:"created_at"`
-}
-
-var (
-	keyStore = sync.Map{}
-)
-
-func GenerateAPIKey(workspaceID string) *APIKey {
-	b := make([]byte, 16)
-	rand.Read(b)
-	id := "sk_" + hex.EncodeToString(b[:8])
-	prefix := id[:8]
-	k := &APIKey{ID: id, WorkspaceID: workspaceID, Prefix: prefix}
-	keyStore.Store(id, k)
-	return k
-}
-
-func ListKeys(workspaceID string) []*APIKey {
-	var out []*APIKey
-	keyStore.Range(func(k, v interface{}) bool {
-		apiKey := v.(*APIKey)
-		if workspaceID == "" || apiKey.WorkspaceID == workspaceID {
-			out = append(out, apiKey)
-		}
-		return true
-	})
-	return out
-}
 
 func (s *Store) DeleteWorkspace(workspaceID string) error {
 	// Delete all collections with prefix ws_<id>*
@@ -84,13 +48,19 @@ func (s *Store) QueryConclusions(workspaceID, query string, n int) ([]map[string
 		colls = append(colls, conclusionsCollection("_global"))
 	}
 	emb, err := s.embed.EmbedSingle(query)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	var out []map[string]interface{}
 	for _, collName := range colls {
 		coll, err := s.chroma.GetCollection(collName)
-		if err != nil { continue } // missing collection = no global facts yet
-		results, err := s.chroma.Query(coll.ID, [][]float32{emb}, n, nil, []string{"documents","metadatas","distances"})
-		if err != nil { continue }
+		if err != nil {
+			continue
+		} // missing collection = no global facts yet
+		results, err := s.chroma.Query(coll.ID, [][]float32{emb}, n, nil, []string{"documents", "metadatas", "distances"})
+		if err != nil {
+			continue
+		}
 		for _, r := range results {
 			score := math.Max(0, 1-float64(r.Distance))
 			out = append(out, map[string]interface{}{"id": r.ID, "document": r.Document, "metadata": r.Metadata, "distance": r.Distance, "score": score})
@@ -102,11 +72,15 @@ func (s *Store) QueryConclusions(workspaceID, query string, n int) ([]map[string
 	deduped := out[:0]
 	for _, m := range out {
 		id, _ := m["id"].(string)
-		if seen[id] { continue }
+		if seen[id] {
+			continue
+		}
 		seen[id] = true
 		deduped = append(deduped, m)
 	}
-	if len(deduped) > n { deduped = deduped[:n] }
+	if len(deduped) > n {
+		deduped = deduped[:n]
+	}
 	return deduped, nil
 }
 

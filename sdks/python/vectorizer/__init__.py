@@ -2,7 +2,7 @@
 
 Covers: health/metrics, messages (CRUD, batch, search, upload, grep,
 temporal, analytics), sessions, workspaces, chat (agentic + peers),
-conclusions/representations, code index/symbols/callers, scopes, keys,
+conclusions/representations, code index/symbols/callers, scopes,
 admin embedding hot-swap, webhooks, and brain endpoints.
 
 Backwards compatible: ``search``, ``add_messages`` and ``health`` keep
@@ -315,25 +315,6 @@ class Vectorizer:
     def scope_status(self, workspace_id, scope_id):
         return self._req(
             "/api/v1/workspaces/%s/scopes/%s/status" % (workspace_id, scope_id))
-
-    # -- keys ----------------------------------------------------------
-    def create_key(self, workspace_id=None, name=None):
-        body = {}
-        if workspace_id:
-            body["workspace_id"] = workspace_id
-        if name:
-            body["name"] = name
-        if workspace_id:
-            return self._req(
-                "/api/v1/workspaces/%s/keys" % workspace_id,
-                method="POST", json=body)
-        return self._req("/api/v1/keys", method="POST", json=body)
-
-    def list_keys(self, workspace_id=None):
-        if workspace_id:
-            return self._req("/api/v1/workspaces/%s/keys" % workspace_id)
-        params = {"workspace_id": workspace_id} if workspace_id else None
-        return self._req("/api/v1/keys", params=params)
 
     # -- admin / webhooks / brain --------------------------------------
     def get_embedding(self):
